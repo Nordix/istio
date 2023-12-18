@@ -43,8 +43,8 @@ import (
 )
 
 var (
-	revision = ""
-
+	revision      = ""
+	waitReady     bool
 	allNamespaces bool
 
 	deleteAll bool
@@ -310,6 +310,7 @@ func Cmd(ctx cli.Context) *cobra.Command {
 	}
 
 	waypointApplyCmd.PersistentFlags().StringVarP(&revision, "revision", "r", "", "The revision to label the waypoint with")
+	waypointApplyCmd.PersistentFlags().BoolVarP(&waitReady, "wait-ready", "W", false, "Wait for the waypoint pod to be ready and synchronized")
 	waypointCmd.AddCommand(waypointApplyCmd)
 	waypointGenerateCmd.PersistentFlags().StringVarP(&revision, "revision", "r", "", "The revision to label the waypoint with")
 	waypointCmd.AddCommand(waypointGenerateCmd)
