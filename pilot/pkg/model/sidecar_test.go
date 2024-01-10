@@ -2001,7 +2001,7 @@ func TestCreateSidecarScope(t *testing.T) {
 			}
 
 			sidecarConfig := tt.sidecarConfig
-			sidecarScope := ConvertToSidecarScope(ps, sidecarConfig, "mynamespace")
+			sidecarScope := convertToSidecarScope(ps, sidecarConfig, "mynamespace")
 			configuredListeneres := 1
 			if sidecarConfig != nil {
 				r := sidecarConfig.Spec.(*networking.Sidecar)
@@ -2316,7 +2316,7 @@ func TestContainsEgressDependencies(t *testing.T) {
 			// nolint lll
 			ps.virtualServiceIndex.publicByGateway[constants.IstioMeshGateway] = append(ps.virtualServiceIndex.publicByGateway[constants.IstioMeshGateway], virtualServices...)
 			ps.setDestinationRules(destinationRules)
-			sidecarScope := ConvertToSidecarScope(ps, cfg, "default")
+			sidecarScope := convertToSidecarScope(ps, cfg, "default")
 			if len(tt.egress) == 0 {
 				sidecarScope = DefaultSidecarScopeForNamespace(ps, "default")
 			}
@@ -2375,7 +2375,7 @@ func TestRootNsSidecarDependencies(t *testing.T) {
 			ps := NewPushContext()
 			meshConfig := mesh.DefaultMeshConfig()
 			ps.Mesh = meshConfig
-			sidecarScope := ConvertToSidecarScope(ps, cfg, "default")
+			sidecarScope := convertToSidecarScope(ps, cfg, "default")
 			if len(tt.egress) == 0 {
 				sidecarScope = DefaultSidecarScopeForNamespace(ps, "default")
 			}
@@ -2509,7 +2509,7 @@ outboundTrafficPolicy:
 			if test.sidecar == nil {
 				sidecarScope = DefaultSidecarScopeForNamespace(ps, "not-default")
 			} else {
-				sidecarScope = ConvertToSidecarScope(ps, test.sidecar, test.sidecar.Namespace)
+				sidecarScope = convertToSidecarScope(ps, test.sidecar, test.sidecar.Namespace)
 			}
 
 			if !reflect.DeepEqual(test.outboundTrafficPolicy, sidecarScope.OutboundTrafficPolicy) {
@@ -2665,7 +2665,7 @@ func TestInboundConnectionPoolForPort(t *testing.T) {
 				},
 				Spec: tt.sidecar,
 			}
-			scope := ConvertToSidecarScope(ps, sidecar, sidecar.Namespace)
+			scope := convertToSidecarScope(ps, sidecar, sidecar.Namespace)
 
 			for port, expected := range tt.want {
 				actual := scope.InboundConnectionPoolForPort(port)
@@ -2778,7 +2778,7 @@ func TestComputeWildcardHostVirtualServiceIndex(t *testing.T) {
 			Meta: config.Meta{
 				Name:              "foo2",
 				Namespace:         "default",
-				CreationTimestamp: olderTime.Add(30 * time.Minute), // Make sure we're newer than wild.default
+				CreationTimestamp: olderTime.Add(30 * time.Minute), // This should not be used despite being older than foo
 			},
 			Spec: &networking.VirtualService{
 				Hosts: []string{"foo.example.com"},
@@ -2843,7 +2843,7 @@ func TestComputeWildcardHostVirtualServiceIndex(t *testing.T) {
 			virtualServices: virtualServices,
 			services:        services,
 			expectedIndex: map[host.Name]types.NamespacedName{
-				"foo.example.com":     {Name: "foo2", Namespace: "default"},
+				"foo.example.com":     {Name: "foo", Namespace: "default"},
 				"baz.example.com":     {Name: "wild", Namespace: "default"},
 				"qux.bar.example.com": {Name: "barwild", Namespace: "default"},
 				"*.bar.example.com":   {Name: "barwild", Namespace: "default"},

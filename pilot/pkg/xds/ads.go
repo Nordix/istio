@@ -379,9 +379,6 @@ func (s *DiscoveryServer) shouldRespond(con *Connection, request *discovery.Disc
 		errCode := codes.Code(request.ErrorDetail.Code)
 		log.Warnf("ADS:%s: ACK ERROR %s %s:%s", stype, con.conID, errCode.String(), request.ErrorDetail.GetMessage())
 		incrementXDSRejects(request.TypeUrl, con.proxy.ID, errCode.String())
-		if s.StatusGen != nil {
-			s.StatusGen.OnNack(con.proxy, request)
-		}
 		return false, emptyResourceDelta
 	}
 
@@ -583,9 +580,6 @@ func (s *DiscoveryServer) closeConnection(con *Connection) {
 		return
 	}
 	s.removeCon(con.conID)
-	if s.StatusGen != nil {
-		s.StatusGen.OnDisconnect(con)
-	}
 	if s.StatusReporter != nil {
 		s.StatusReporter.RegisterDisconnect(con.conID, AllEventTypesList)
 	}
@@ -943,7 +937,7 @@ func (conn *Connection) send(res *discovery.DiscoveryResponse) error {
 			conn.proxy.Unlock()
 		}
 	} else if status.Convert(err).Code() == codes.DeadlineExceeded {
-		log.Infof("Timeout writing %s", conn.conID)
+		log.Infof("Timeout writing %s: ", conn.conID, v3.GetShortType(res.TypeUrl))
 		xdsResponseWriteTimeouts.Increment()
 	}
 	return err

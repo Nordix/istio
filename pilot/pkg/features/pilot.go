@@ -15,6 +15,7 @@
 package features
 
 import (
+	"runtime"
 	"strings"
 	"time"
 
@@ -58,17 +59,43 @@ var (
 		return f
 	}()
 
-	PushThrottle = env.Register(
-		"PILOT_PUSH_THROTTLE",
-		100,
-		"Limits the number of concurrent pushes allowed. On larger machines this can be increased for faster pushes",
-	).Get()
+	PushThrottle = func() int {
+		v := env.Register(
+			"PILOT_PUSH_THROTTLE",
+			0,
+			"Limits the number of concurrent pushes allowed. On larger machines this can be increased for faster pushes. "+
+				"If set to 0 or unset, the max will be automatically determined based on the machine size",
+		).Get()
+		if v > 0 {
+			return v
+		}
+		procs := runtime.GOMAXPROCS(0)
+		// Heuristic to scale with cores. We end up with...
+		// 1: 20
+		// 2: 25
+		// 4: 35
+		// 32: 100
+		return min(15+5*procs, 100)
+	}()
 
-	RequestLimit = env.Register(
-		"PILOT_MAX_REQUESTS_PER_SECOND",
-		25.0,
-		"Limits the number of incoming XDS requests per second. On larger machines this can be increased to handle more proxies concurrently.",
-	).Get()
+	RequestLimit = func() float64 {
+		v := env.Register(
+			"PILOT_MAX_REQUESTS_PER_SECOND",
+			0.0,
+			"Limits the number of incoming XDS requests per second. On larger machines this can be increased to handle more proxies concurrently. "+
+				"If set to 0 or unset, the max will be automatically determined based on the machine size",
+		).Get()
+		if v > 0 {
+			return v
+		}
+		procs := runtime.GOMAXPROCS(0)
+		// Heuristic to scale with cores. We end up with...
+		// 1: 20
+		// 2: 25
+		// 4: 35
+		// 32: 100
+		return min(float64(15+5*procs), 100.0)
+	}()
 
 	// FilterGatewayClusterConfig controls if a subset of clusters(only those required) should be pushed to gateways
 	FilterGatewayClusterConfig = env.Register("PILOT_FILTER_GATEWAY_CLUSTER_CONFIG", false,
@@ -94,6 +121,14 @@ var (
 		true,
 		"If enabled, Pilot will include EDS pushes in the push debouncing, configured by PILOT_DEBOUNCE_AFTER and PILOT_DEBOUNCE_MAX."+
 			" EDS pushes may be delayed, but there will be fewer pushes. By default this is enabled",
+	).Get()
+
+	ConvertSidecarScopeConcurrency = env.Register(
+		"PILOT_CONVERT_SIDECAR_SCOPE_CONCURRENCY",
+		1,
+		"Used to adjust the concurrency of SidecarScope conversions. "+
+			"When istiod is deployed on a multi-core CPU server, increasing this value will help to use the CPU to "+
+			"accelerate configuration push, but it also means that istiod will consume more CPU resources.",
 	).Get()
 
 	SendUnhealthyEndpoints = atomic.NewBool(env.Register(
@@ -514,16 +549,6 @@ var (
 		"PILOT_JWT_PUB_KEY_REFRESH_INTERVAL",
 		20*time.Minute,
 		"The interval for istiod to fetch the jwks_uri for the jwks public key.",
-	).Get()
-
-	EnableInboundPassthrough = env.Register(
-		"PILOT_ENABLE_INBOUND_PASSTHROUGH",
-		true,
-		"If enabled, inbound clusters will be configured as ORIGINAL_DST clusters. When disabled, "+
-			"requests are always sent to localhost. The primary implication of this is that when enabled, binding to POD_IP "+
-			"will work while localhost will not; when disable, bind to POD_IP will not work, while localhost will. "+
-			"The enabled behavior matches the behavior without Istio enabled at all; this flag exists only for backwards compatibility. "+
-			"Regardless of this setting, the configuration can be overridden with the Sidecar.Ingress.DefaultEndpoint configuration.",
 	).Get()
 
 	// EnableHBONE provides a global Pilot flag for enabling HBONE.

@@ -304,6 +304,35 @@ spec:
 		workloadAgnostic: true,
 	})
 	t.RunTraffic(TrafficTestCase{
+		name: "set authority header in destination",
+		config: `
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: default
+spec:
+  hosts:
+  - {{ (index .dst 0).Config.Service }}
+  http:
+  - route:
+    - destination:
+        host: {{ (index .dst 0).Config.Service }}
+      headers:
+        request:
+          set:
+            :authority: my-custom-authority`,
+		opts: echo.CallOptions{
+			Port: echo.Port{
+				Name: "http",
+			},
+			Count: 1,
+			Check: check.And(
+				check.OK(),
+				check.Host("my-custom-authority")),
+		},
+		workloadAgnostic: true,
+	})
+	t.RunTraffic(TrafficTestCase{
 		name: "set host header in route and destination",
 		config: `
 apiVersion: networking.istio.io/v1alpha3
@@ -2621,12 +2650,20 @@ spec:
 				config: svc + tmpl.MustEvaluate(cookieWithTTLDest, ""),
 				call:   c.CallOrFail,
 				opts:   cookieCallOpts,
+				skip: skip{
+					skip:   true,
+					reason: "https://github.com/istio/istio/issues/48156: not currently working, as test framework is not passing the cookies back",
+				},
 			})
 			t.RunTraffic(TrafficTestCase{
 				name:   "http cookie without ttl" + c.Config().Service,
 				config: svc + tmpl.MustEvaluate(cookieWithoutTTLDest, ""),
 				call:   c.CallOrFail,
 				opts:   cookieWithoutTTLCallOpts,
+				skip: skip{
+					skip:   true,
+					reason: "https://github.com/istio/istio/issues/48156: not currently working, as test framework is not passing the cookies back",
+				},
 			})
 		}
 	}

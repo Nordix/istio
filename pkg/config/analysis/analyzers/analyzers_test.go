@@ -124,6 +124,15 @@ var testGrid = []testCase{
 		},
 	},
 	{
+		name:       "externalControlPlaneMissingWebhooks",
+		inputFiles: []string{"testdata/externalcontrolplane-missing-urls-custom-ns.yaml"},
+		analyzer:   &externalcontrolplane.ExternalControlPlaneAnalyzer{},
+		expected: []message{
+			{msg.InvalidExternalControlPlaneConfig, "MutatingWebhookConfiguration istio-sidecar-injector-custom-ns"},
+			{msg.InvalidExternalControlPlaneConfig, "ValidatingWebhookConfiguration istio-validator-custom-ns"},
+		},
+	},
+	{
 		name:       "externalControlPlaneUsingIpAddresses",
 		inputFiles: []string{"testdata/externalcontrolplane-using-ip-addr.yaml"},
 		analyzer:   &externalcontrolplane.ExternalControlPlaneAnalyzer{},
@@ -134,6 +143,14 @@ var testGrid = []testCase{
 	{
 		name:       "externalControlPlaneValidWebhooks",
 		inputFiles: []string{"testdata/externalcontrolplane-valid-urls.yaml"},
+		analyzer:   &externalcontrolplane.ExternalControlPlaneAnalyzer{},
+		expected:   []message{
+			// no messages, this test case verifies no false positives
+		},
+	},
+	{
+		name:       "externalControlPlaneValidWebhooks",
+		inputFiles: []string{"testdata/externalcontrolplane-valid-urls-custom-ns.yaml"},
 		analyzer:   &externalcontrolplane.ExternalControlPlaneAnalyzer{},
 		expected:   []message{
 			// no messages, this test case verifies no false positives
@@ -336,10 +353,12 @@ var testGrid = []testCase{
 	{
 		name:       "sidecarDefaultSelector",
 		inputFiles: []string{"testdata/sidecar-default-selector.yaml"},
-		analyzer:   &sidecar.DefaultSelectorAnalyzer{},
+		analyzer:   &sidecar.SelectorAnalyzer{},
 		expected: []message{
 			{msg.MultipleSidecarsWithoutWorkloadSelectors, "Sidecar ns2/has-conflict-2"},
 			{msg.MultipleSidecarsWithoutWorkloadSelectors, "Sidecar ns2/has-conflict-1"},
+			{msg.IneffectivePolicy, "Sidecar ns-ambient/namespace-scoped"},
+			{msg.IneffectivePolicy, "Sidecar ns-ambient/pod-scoped"},
 		},
 	},
 	{

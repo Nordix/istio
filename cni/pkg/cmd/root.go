@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/cobra/doc"
 	"github.com/spf13/viper"
 
 	"istio.io/istio/cni/pkg/ambient"
@@ -140,7 +139,7 @@ func init() {
 	ctrlzOptions.AttachCobraFlags(rootCmd)
 
 	rootCmd.AddCommand(version.CobraCommand())
-	rootCmd.AddCommand(collateral.CobraCommand(rootCmd, &doc.GenManHeader{
+	rootCmd.AddCommand(collateral.CobraCommand(rootCmd, collateral.Metadata{
 		Title:   "Istio CNI Plugin Installer",
 		Section: "install-cni CLI",
 		Manual:  "Istio CNI Plugin Installer",
@@ -257,6 +256,7 @@ func constructConfig() (*config.Config, error) {
 
 	repairCfg := config.RepairConfig{
 		Enabled:            viper.GetBool(constants.RepairEnabled),
+		RepairPods:         viper.GetBool(constants.RepairRepairPods),
 		DeletePods:         viper.GetBool(constants.RepairDeletePods),
 		LabelPods:          viper.GetBool(constants.RepairLabelPods),
 		LabelKey:           viper.GetString(constants.RepairLabelKey),
