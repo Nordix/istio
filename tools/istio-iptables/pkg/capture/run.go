@@ -750,6 +750,12 @@ func (cfg *IptablesConfigurator) executeIptablesCommands(iptVer *dep.IptablesVer
 	return nil
 }
 
+func (cfg *IptablesConfigurator) tryExecuteIptablesCommands(iptVer *dep.IptablesVersion, commands [][]string) {
+	for _, cmd := range commands {
+		cfg.ext.RunQuietlyAndIgnore(constants.IPTables, iptVer, nil, cmd...)
+	}
+}
+
 func (cfg *IptablesConfigurator) executeIptablesRestoreCommand(iptVer *dep.IptablesVersion, isIpv4 bool) error {
 	var data string
 	if isIpv4 {
@@ -764,6 +770,11 @@ func (cfg *IptablesConfigurator) executeIptablesRestoreCommand(iptVer *dep.Iptab
 }
 
 func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVersion) error {
+	if cfg.cfg.PreemptiveCleanup {
+		cfg.tryExecuteIptablesCommands(iptVer, cfg.ruleBuilder.BuildCleanupV4())
+		cfg.tryExecuteIptablesCommands(ipt6Ver, cfg.ruleBuilder.BuildCleanupV6())
+	}
+
 	if cfg.cfg.RestoreFormat {
 		// Execute iptables-restore
 		if err := cfg.executeIptablesRestoreCommand(iptVer, true); err != nil {

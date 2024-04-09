@@ -170,12 +170,67 @@ func (rb *IptablesRuleBuilder) buildRules(rules []*Rule) [][]string {
 	return output
 }
 
+func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
+	output := make([][]string, 0)
+	chainTableLookupSet := sets.New[string]()
+	for _, r := range rules {
+		var modifiedParams []string
+		skip := false
+		for i, element := range r.params {
+			if element == "-A" && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
+				modifiedParams = append(modifiedParams, "-D")
+				skip = true
+			} else {
+				if element == "-j" && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
+					skip = false
+				}
+				modifiedParams = append(modifiedParams, element)
+			}
+		}
+		if skip {
+			continue
+		}
+
+		cmd := append([]string{"-t", r.table}, modifiedParams...)
+		output = append(output, cmd)
+	}
+	for _, r := range rules {
+		chainTable := fmt.Sprintf("%s:%s", r.chain, r.table)
+		// Create new chain if key: `chainTable` isn't present in map
+		if !chainTableLookupSet.Contains(chainTable) {
+			// Ignore chain creation for built-in chains for iptables
+			if _, present := constants.BuiltInChainsMap[r.chain]; !present {
+				cmd := []string{"-X", r.chain}
+				output = append(output, cmd)
+				chainTableLookupSet.Insert(chainTable)
+			}
+		}
+	}
+	return output
+}
+
 func (rb *IptablesRuleBuilder) BuildV4() [][]string {
 	return rb.buildRules(rb.rules.rulesv4)
 }
 
 func (rb *IptablesRuleBuilder) BuildV6() [][]string {
 	return rb.buildRules(rb.rules.rulesv6)
+}
+
+func (rb *IptablesRuleBuilder) BuildCleanupV4() [][]string {
+	rules := make([]*Rule, len(rb.rules.rulesv4))
+	for i := len(rb.rules.rulesv4) - 1; i >= 0; i-- {
+		rules[len(rb.rules.rulesv4)-1-i] = rb.rules.rulesv4[i]
+	}
+	return rb.buildCleanupRules(rules)
+}
+
+func (rb *IptablesRuleBuilder) BuildCleanupV6() [][]string {
+	rules := make([]*Rule, len(rb.rules.rulesv6))
+	for i := len(rb.rules.rulesv6) - 1; i >= 0; i-- {
+		rules[len(rb.rules.rulesv6)-1-i] = rb.rules.rulesv6[i]
+	}
+	return rb.buildCleanupRules(rules)
 }
 
 func (rb *IptablesRuleBuilder) constructIptablesRestoreContents(tableRulesMap map[string][]string) string {

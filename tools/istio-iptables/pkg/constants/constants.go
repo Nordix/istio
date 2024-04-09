@@ -108,6 +108,7 @@ const (
 	NetworkNamespace          = "network-namespace"
 	CNIMode                   = "cni-mode"
 	IptablesVersion           = "iptables-version"
+	PreemptiveCleanup         = "preemptive-cleanup"
 )
 
 // Environment variables that deliberately have no equivalent command-line flags.
