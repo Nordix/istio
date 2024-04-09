@@ -87,6 +87,7 @@ type Config struct {
 	DualStack               bool          `json:"DUAL_STACK"`
 	HostIP                  netip.Addr    `json:"HOST_IP"`
 	HostIPv4LoopbackCidr    string        `json:"HOST_IPV4_LOOPBACK_CIDR"`
+	PreemptiveCleanup       bool          `json:"PREEMPTIVE_CLEANUP"`
 }
 
 func (c *Config) String() string {
@@ -125,6 +126,7 @@ func (c *Config) Print() {
 	b.WriteString(fmt.Sprintf("NETWORK_NAMESPACE=%s\n", c.NetworkNamespace))
 	b.WriteString(fmt.Sprintf("CNI_MODE=%s\n", strconv.FormatBool(c.CNIMode)))
 	b.WriteString(fmt.Sprintf("EXCLUDE_INTERFACES=%s\n", c.ExcludeInterfaces))
+	b.WriteString(fmt.Sprintf("PREEMPTIVE_CLEANUP=%t\n", c.PreemptiveCleanup))
 	log.Infof("Istio iptables variables:\n%s", b.String())
 }
 
