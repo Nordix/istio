@@ -337,6 +337,43 @@ func TestSeparateV4V6(t *testing.T) {
 	}
 }
 
+func TestCleanup(t *testing.T) {
+	cases := []struct {
+		name   string
+		config func(cfg *config.Config)
+	}{
+		{
+			"cleanup-empty",
+			func(cfg *config.Config) {
+				cfg.PreemptiveCleanup = true
+			},
+		},
+		{
+			"cleanup-dns",
+			func(cfg *config.Config) {
+				cfg.RedirectDNS = true
+				cfg.DNSServersV4 = []string{"127.0.0.53"}
+				cfg.DNSServersV6 = []string{"::127.0.0.53"}
+				cfg.ProxyGID = "1,2"
+				cfg.ProxyUID = "3,4"
+				cfg.EnableInboundIPv6 = true
+				cfg.PreemptiveCleanup = true
+			},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := constructTestConfig()
+			tt.config(cfg)
+
+			ext := &dep.DependenciesStub{}
+			iptConfigurator := NewIptablesConfigurator(cfg, ext)
+			iptConfigurator.Run()
+			compareToGolden(t, tt.name, ext.ExecutedQuietly)
+		})
+	}
+}
+
 func compareToGolden(t *testing.T, name string, actual []string) {
 	t.Helper()
 	gotBytes := []byte(strings.Join(actual, "\n"))
