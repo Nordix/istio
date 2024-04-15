@@ -177,14 +177,16 @@ func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
 		var modifiedParams []string
 		skip := false
 		for i, element := range r.params {
-			if element == "-A" && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
+			if element == "-A" {
 				modifiedParams = append(modifiedParams, "-D")
-				skip = true
 			} else {
-				if element == "-j" && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
-					skip = false
-				}
 				modifiedParams = append(modifiedParams, element)
+			}
+
+			if element == "-A" && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
+				skip = true
+			} else if element == "-j" && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
+				skip = false
 			}
 		}
 		if skip {
