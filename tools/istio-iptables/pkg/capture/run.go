@@ -771,6 +771,7 @@ func (cfg *IptablesConfigurator) executeIptablesRestoreCommand(iptVer *dep.Iptab
 
 func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVersion) error {
 	if cfg.cfg.PreemptiveCleanup {
+		log.Infof("Running pre-emptive cleanup")
 		cfg.tryExecuteIptablesCommands(iptVer, cfg.ruleBuilder.BuildCleanupV4())
 		cfg.tryExecuteIptablesCommands(ipt6Ver, cfg.ruleBuilder.BuildCleanupV6())
 	}
