@@ -171,9 +171,8 @@ func (rb *IptablesRuleBuilder) buildRules(rules []*Rule) [][]string {
 	return output
 }
 
-func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
-	output := make([][]string, 0)
-	chainTableLookupSet := sets.New[string]()
+func reverseRules(rules []*Rule) []*Rule {
+	output := make([]*Rule, 0)
 	for _, r := range rules {
 		var modifiedParams []string
 		skip := false
@@ -197,13 +196,31 @@ func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
 		}
 
 		if !isJump {
-			log.Warnf("Found non-jump rule in non-Istio chain (rule: %s) \n", strings.Join(r.params, ""))
+			log.Warnf("Found non-jump rule in non-Istio chain (rule: %s) \n", strings.Join(r.params, " "))
 		}
+		output = append(output, &Rule{
+			chain:  r.chain,
+			table:  r.table,
+			params: modifiedParams,
+		})
+	}
+	return output
+}
 
-		cmd := append([]string{"-t", r.table}, modifiedParams...)
+func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
+	newRules := make([]*Rule, len(rules))
+	for i := len(rules) - 1; i >= 0; i-- {
+		newRules[len(rules)-1-i] = rules[i]
+	}
+
+	output := make([][]string, 0)
+	reversedRules := reverseRules(newRules)
+	for _, r := range reversedRules {
+		cmd := append([]string{"-t", r.table}, r.params...)
 		output = append(output, cmd)
 	}
-	for _, r := range rules {
+	chainTableLookupSet := sets.New[string]()
+	for _, r := range newRules {
 		chainTable := fmt.Sprintf("%s:%s", r.chain, r.table)
 		// Create new chain if key: `chainTable` isn't present in map
 		if !chainTableLookupSet.Contains(chainTable) {
@@ -218,6 +235,37 @@ func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
 	return output
 }
 
+func (rb *IptablesRuleBuilder) buildCleanupRulesRestore(rules []*Rule) string {
+	newRules := make([]*Rule, len(rules))
+	for i := len(rules) - 1; i >= 0; i-- {
+		newRules[len(rules)-1-i] = rules[i]
+	}
+	reverseRules := reverseRules(newRules)
+	tableRulesMap := map[string][]string{
+		constants.FILTER: {},
+		constants.NAT:    {},
+		constants.MANGLE: {},
+	}
+
+	for _, r := range reverseRules {
+		tableRulesMap[r.table] = append(tableRulesMap[r.table], strings.Join(r.params, " "))
+	}
+
+	chainTableLookupMap := sets.New[string]()
+	for _, r := range newRules {
+		chainTable := fmt.Sprintf("%s:%s", r.chain, r.table)
+		// Create new chain if key: `chainTable` isn't present in map
+		if !chainTableLookupMap.Contains(chainTable) {
+			// Ignore chain creation for built-in chains for iptables
+			if _, present := constants.BuiltInChainsMap[r.chain]; !present {
+				tableRulesMap[r.table] = append(tableRulesMap[r.table], fmt.Sprintf("-X %s", r.chain))
+				chainTableLookupMap.Insert(chainTable)
+			}
+		}
+	}
+	return rb.constructIptablesRestoreContents(tableRulesMap)
+}
+
 func (rb *IptablesRuleBuilder) BuildV4() [][]string {
 	return rb.buildRules(rb.rules.rulesv4)
 }
@@ -227,19 +275,19 @@ func (rb *IptablesRuleBuilder) BuildV6() [][]string {
 }
 
 func (rb *IptablesRuleBuilder) BuildCleanupV4() [][]string {
-	rules := make([]*Rule, len(rb.rules.rulesv4))
-	for i := len(rb.rules.rulesv4) - 1; i >= 0; i-- {
-		rules[len(rb.rules.rulesv4)-1-i] = rb.rules.rulesv4[i]
-	}
-	return rb.buildCleanupRules(rules)
+	return rb.buildCleanupRules(rb.rules.rulesv4)
 }
 
 func (rb *IptablesRuleBuilder) BuildCleanupV6() [][]string {
-	rules := make([]*Rule, len(rb.rules.rulesv6))
-	for i := len(rb.rules.rulesv6) - 1; i >= 0; i-- {
-		rules[len(rb.rules.rulesv6)-1-i] = rb.rules.rulesv6[i]
-	}
-	return rb.buildCleanupRules(rules)
+	return rb.buildCleanupRules(rb.rules.rulesv6)
+}
+
+func (rb *IptablesRuleBuilder) BuildCleanupV4Restore() string {
+	return rb.buildCleanupRulesRestore(rb.rules.rulesv4)
+}
+
+func (rb *IptablesRuleBuilder) BuildCleanupV6Restore() string {
+	return rb.buildCleanupRulesRestore(rb.rules.rulesv6)
 }
 
 func (rb *IptablesRuleBuilder) constructIptablesRestoreContents(tableRulesMap map[string][]string) string {

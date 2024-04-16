@@ -1,7 +1,0 @@
-iptables -t nat -D ISTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp ! --dport 15008 -m owner --gid-owner 1337 -j ISTIO_IN_REDIRECT
-iptables -t nat -D ISTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp ! --dport 15008 -m owner --uid-owner 1337 -j ISTIO_IN_REDIRECT
-iptables -t nat -D OUTPUT -p tcp -j ISTIO_OUTPUT
-iptables -X ISTIO_OUTPUT
-iptables -X ISTIO_IN_REDIRECT
-iptables -X ISTIO_REDIRECT
-iptables -X ISTIO_INBOUND

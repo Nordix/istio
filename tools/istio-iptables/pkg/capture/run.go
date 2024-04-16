@@ -756,40 +756,42 @@ func (cfg *IptablesConfigurator) tryExecuteIptablesCommands(iptVer *dep.Iptables
 	}
 }
 
-func (cfg *IptablesConfigurator) executeIptablesRestoreCommand(iptVer *dep.IptablesVersion, isIpv4 bool) error {
-	var data string
-	if isIpv4 {
-		data = cfg.ruleBuilder.BuildV4Restore()
-	} else {
-		data = cfg.ruleBuilder.BuildV6Restore()
-	}
-
+func (cfg *IptablesConfigurator) executeIptablesRestoreCommand(iptVer *dep.IptablesVersion, data string) error {
 	log.Infof("Running iptables restore with: %s and the following input:\n%v", iptVer.CmdToString(constants.IPTablesRestore), strings.TrimSpace(data))
 	// --noflush to prevent flushing/deleting previous contents from table
 	return cfg.ext.Run(constants.IPTablesRestore, iptVer, strings.NewReader(data), "--noflush")
 }
 
-func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVersion) error {
-	if cfg.cfg.PreemptiveCleanup {
-		log.Infof("Running pre-emptive cleanup")
-		cfg.tryExecuteIptablesCommands(iptVer, cfg.ruleBuilder.BuildCleanupV4())
-		cfg.tryExecuteIptablesCommands(ipt6Ver, cfg.ruleBuilder.BuildCleanupV6())
-	}
+func (cfg *IptablesConfigurator) tryExecuteIptablesRestoreCommand(iptVer *dep.IptablesVersion, data string) {
+	log.Infof("Running iptables restore with: %s and the following input:\n%v", iptVer.CmdToString(constants.IPTablesRestore), strings.TrimSpace(data))
+	// --noflush to prevent flushing/deleting previous contents from table
+	cfg.ext.RunQuietlyAndIgnore(constants.IPTablesRestore, iptVer, strings.NewReader(data), "--noflush")
+}
 
+func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVersion) error {
 	if cfg.cfg.RestoreFormat {
+		// Preemptive cleanup
+		cfg.tryExecuteIptablesRestoreCommand(iptVer, cfg.ruleBuilder.BuildCleanupV4Restore())
+		cfg.tryExecuteIptablesRestoreCommand(iptVer, cfg.ruleBuilder.BuildCleanupV6Restore())
+
 		// Execute iptables-restore
-		if err := cfg.executeIptablesRestoreCommand(iptVer, true); err != nil {
+		if err := cfg.executeIptablesRestoreCommand(iptVer, cfg.ruleBuilder.BuildV4Restore()); err != nil {
 			return err
 		}
 		// Execute ip6tables-restore
-		if err := cfg.executeIptablesRestoreCommand(ipt6Ver, false); err != nil {
+		if err := cfg.executeIptablesRestoreCommand(ipt6Ver, cfg.ruleBuilder.BuildV6Restore()); err != nil {
 			return err
 		}
 	} else {
+		// Preemptive cleanup
+		cfg.tryExecuteIptablesCommands(iptVer, cfg.ruleBuilder.BuildCleanupV4())
+		cfg.tryExecuteIptablesCommands(ipt6Ver, cfg.ruleBuilder.BuildCleanupV6())
+
 		// Execute iptables commands
 		if err := cfg.executeIptablesCommands(iptVer, cfg.ruleBuilder.BuildV4()); err != nil {
 			return err
 		}
+
 		// Execute ip6tables commands
 		if err := cfg.executeIptablesCommands(ipt6Ver, cfg.ruleBuilder.BuildV6()); err != nil {
 			return err

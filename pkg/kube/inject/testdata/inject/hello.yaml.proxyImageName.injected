@@ -185,7 +185,6 @@ spec:
         - -d
         - 15090,15021,15020
         - --log_output_level=default:info
-        - --preemptive-cleanup
         image: gcr.io/istio-testing/proxyTest:latest
         name: istio-init
         resources:

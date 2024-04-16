@@ -136,8 +136,6 @@ func bindCmdlineFlags(cfg *config.Config, cmd *cobra.Command) {
 		&cfg.NetworkNamespace)
 
 	flag.BindEnv(fs, constants.CNIMode, "", "Whether to run as CNI plugin.", &cfg.CNIMode)
-
-	flag.BindEnv(fs, constants.PreemptiveCleanup, "", "Whether to run a preemptive cleanup to prevent duplicated rules and chains", &cfg.PreemptiveCleanup)
 }
 
 func GetCommand(logOpts *log.Options) *cobra.Command {

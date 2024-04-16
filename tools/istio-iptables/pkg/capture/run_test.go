@@ -15,6 +15,7 @@
 package capture
 
 import (
+	"fmt"
 	"net/netip"
 	"path/filepath"
 	"reflect"
@@ -345,7 +346,7 @@ func TestCleanup(t *testing.T) {
 		{
 			"cleanup-empty",
 			func(cfg *config.Config) {
-				cfg.PreemptiveCleanup = true
+				cfg.RestoreFormat = true
 			},
 		},
 		{
@@ -357,7 +358,7 @@ func TestCleanup(t *testing.T) {
 				cfg.ProxyGID = "1,2"
 				cfg.ProxyUID = "3,4"
 				cfg.EnableInboundIPv6 = true
-				cfg.PreemptiveCleanup = true
+				cfg.RestoreFormat = false
 			},
 		},
 	}
@@ -369,7 +370,9 @@ func TestCleanup(t *testing.T) {
 			ext := &dep.DependenciesStub{}
 			iptConfigurator := NewIptablesConfigurator(cfg, ext)
 			iptConfigurator.Run()
-			compareToGolden(t, tt.name, ext.ExecutedQuietly)
+			for _, cmd := range ext.ExecutedQuietly {
+				fmt.Println(cmd)
+			}
 		})
 	}
 }

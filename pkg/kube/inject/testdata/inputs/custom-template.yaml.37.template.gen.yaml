@@ -136,8 +136,6 @@ templates:
         {{ if or .Values.pilot.cni.enabled .Values.istio_cni.enabled -}}
         - "--run-validation"
         - "--skip-rule-apply"
-        {{ else }}
-        - "--preemptive-cleanup"
         {{ end -}}
         {{with .Values.global.imagePullPolicy }}imagePullPolicy: "{{.}}"{{end}}
       {{- if .ProxyConfig.ProxyMetadata }}
