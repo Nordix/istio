@@ -222,9 +222,9 @@ func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
 	chainTableLookupSet := sets.New[string]()
 	for _, r := range newRules {
 		chainTable := fmt.Sprintf("%s:%s", r.chain, r.table)
-		// Create new chain if key: `chainTable` isn't present in map
+		// Delete chain if key: `chainTable` isn't present in map
 		if !chainTableLookupSet.Contains(chainTable) {
-			// Ignore chain creation for built-in chains for iptables
+			// Don't delete iptables built-in chains
 			if _, present := constants.BuiltInChainsMap[r.chain]; !present {
 				cmd := []string{"-X", r.chain}
 				output = append(output, cmd)
@@ -254,9 +254,9 @@ func (rb *IptablesRuleBuilder) buildCleanupRulesRestore(rules []*Rule) string {
 	chainTableLookupMap := sets.New[string]()
 	for _, r := range newRules {
 		chainTable := fmt.Sprintf("%s:%s", r.chain, r.table)
-		// Create new chain if key: `chainTable` isn't present in map
+		// Delete chain if key: `chainTable` isn't present in map
 		if !chainTableLookupMap.Contains(chainTable) {
-			// Ignore chain creation for built-in chains for iptables
+			// Don't delete iptables built-in chains
 			if _, present := constants.BuiltInChainsMap[r.chain]; !present {
 				tableRulesMap[r.table] = append(tableRulesMap[r.table], fmt.Sprintf("-X %s", r.chain))
 				chainTableLookupMap.Insert(chainTable)
