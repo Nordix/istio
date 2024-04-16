@@ -18,10 +18,11 @@ import (
 	"fmt"
 	"strings"
 
+	"istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/util/sets"
 	"istio.io/istio/tools/istio-iptables/pkg/config"
 	"istio.io/istio/tools/istio-iptables/pkg/constants"
-	"istio.io/istio/tools/istio-iptables/pkg/log"
+	iptableslog "istio.io/istio/tools/istio-iptables/pkg/log"
 )
 
 // Rule represents iptables rule - chain, table and options
@@ -57,14 +58,14 @@ func NewIptablesRuleBuilder(cfg *config.Config) *IptablesRuleBuilder {
 	}
 }
 
-func (rb *IptablesRuleBuilder) InsertRule(command log.Command, chain string, table string, position int, params ...string) *IptablesRuleBuilder {
+func (rb *IptablesRuleBuilder) InsertRule(command iptableslog.Command, chain string, table string, position int, params ...string) *IptablesRuleBuilder {
 	rb.InsertRuleV4(command, chain, table, position, params...)
 	rb.InsertRuleV6(command, chain, table, position, params...)
 	return rb
 }
 
 // nolint lll
-func (rb *IptablesRuleBuilder) insertInternal(ipt *[]*Rule, command log.Command, chain string, table string, position int, params ...string) *IptablesRuleBuilder {
+func (rb *IptablesRuleBuilder) insertInternal(ipt *[]*Rule, command iptableslog.Command, chain string, table string, position int, params ...string) *IptablesRuleBuilder {
 	rules := params
 	*ipt = append(*ipt, &Rule{
 		chain:  chain,
@@ -74,7 +75,7 @@ func (rb *IptablesRuleBuilder) insertInternal(ipt *[]*Rule, command log.Command,
 	idx := indexOf("-j", params)
 	// We have identified the type of command this is and logging is enabled. Insert a rule to log this chain was hit.
 	// Since this is insert we do this *after* the real chain, which will result in it bumping it forward
-	if rb.cfg.TraceLogging && idx >= 0 && command != log.UndefinedCommand {
+	if rb.cfg.TraceLogging && idx >= 0 && command != iptableslog.UndefinedCommand {
 		match := params[:idx]
 		// 1337 group is just a random constant to be matched on the log reader side
 		// Size of 20 allows reading the IPv4 IP header.
@@ -88,11 +89,11 @@ func (rb *IptablesRuleBuilder) insertInternal(ipt *[]*Rule, command log.Command,
 	return rb
 }
 
-func (rb *IptablesRuleBuilder) InsertRuleV4(command log.Command, chain string, table string, position int, params ...string) *IptablesRuleBuilder {
+func (rb *IptablesRuleBuilder) InsertRuleV4(command iptableslog.Command, chain string, table string, position int, params ...string) *IptablesRuleBuilder {
 	return rb.insertInternal(&rb.rules.rulesv4, command, chain, table, position, params...)
 }
 
-func (rb *IptablesRuleBuilder) InsertRuleV6(command log.Command, chain string, table string, position int, params ...string) *IptablesRuleBuilder {
+func (rb *IptablesRuleBuilder) InsertRuleV6(command iptableslog.Command, chain string, table string, position int, params ...string) *IptablesRuleBuilder {
 	if !rb.cfg.EnableInboundIPv6 {
 		return rb
 	}
@@ -108,10 +109,10 @@ func indexOf(element string, data []string) int {
 	return -1 // not found.
 }
 
-func (rb *IptablesRuleBuilder) appendInternal(ipt *[]*Rule, command log.Command, chain string, table string, params ...string) *IptablesRuleBuilder {
+func (rb *IptablesRuleBuilder) appendInternal(ipt *[]*Rule, command iptableslog.Command, chain string, table string, params ...string) *IptablesRuleBuilder {
 	idx := indexOf("-j", params)
 	// We have identified the type of command this is and logging is enabled. Appending a rule to log this chain will be hit
-	if rb.cfg.TraceLogging && idx >= 0 && command != log.UndefinedCommand {
+	if rb.cfg.TraceLogging && idx >= 0 && command != iptableslog.UndefinedCommand {
 		match := params[:idx]
 		// 1337 group is just a random constant to be matched on the log reader side
 		// Size of 20 allows reading the IPv4 IP header.
@@ -131,17 +132,17 @@ func (rb *IptablesRuleBuilder) appendInternal(ipt *[]*Rule, command log.Command,
 	return rb
 }
 
-func (rb *IptablesRuleBuilder) AppendRuleV4(command log.Command, chain string, table string, params ...string) *IptablesRuleBuilder {
+func (rb *IptablesRuleBuilder) AppendRuleV4(command iptableslog.Command, chain string, table string, params ...string) *IptablesRuleBuilder {
 	return rb.appendInternal(&rb.rules.rulesv4, command, chain, table, params...)
 }
 
-func (rb *IptablesRuleBuilder) AppendRule(command log.Command, chain string, table string, params ...string) *IptablesRuleBuilder {
+func (rb *IptablesRuleBuilder) AppendRule(command iptableslog.Command, chain string, table string, params ...string) *IptablesRuleBuilder {
 	rb.AppendRuleV4(command, chain, table, params...)
 	rb.AppendRuleV6(command, chain, table, params...)
 	return rb
 }
 
-func (rb *IptablesRuleBuilder) AppendRuleV6(command log.Command, chain string, table string, params ...string) *IptablesRuleBuilder {
+func (rb *IptablesRuleBuilder) AppendRuleV6(command iptableslog.Command, chain string, table string, params ...string) *IptablesRuleBuilder {
 	if !rb.cfg.EnableInboundIPv6 {
 		return rb
 	}
@@ -176,6 +177,7 @@ func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
 	for _, r := range rules {
 		var modifiedParams []string
 		skip := false
+		isJump := false
 		for i, element := range r.params {
 			if element == "-A" {
 				modifiedParams = append(modifiedParams, "-D")
@@ -186,11 +188,16 @@ func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
 			if element == "-A" && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
 				skip = true
 			} else if element == "-j" && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
-				skip = false
+				skip = false // Override previous skip if this is a jump-rule
+				isJump = true
 			}
 		}
 		if skip {
 			continue
+		}
+
+		if !isJump {
+			log.Warnf("Found non-jump rule in non-Istio chain (rule: %s) \n", strings.Join(r.params, ""))
 		}
 
 		cmd := append([]string{"-t", r.table}, modifiedParams...)
@@ -285,7 +292,7 @@ func (rb *IptablesRuleBuilder) BuildV6Restore() string {
 
 // AppendVersionedRule is a wrapper around AppendRule that substitutes an ipv4/ipv6 specific value
 // in place in the params. This allows appending a dual-stack rule that has an IP value in it.
-func (rb *IptablesRuleBuilder) AppendVersionedRule(ipv4 string, ipv6 string, command log.Command, chain string, table string, params ...string) {
+func (rb *IptablesRuleBuilder) AppendVersionedRule(ipv4 string, ipv6 string, command iptableslog.Command, chain string, table string, params ...string) {
 	rb.AppendRuleV4(command, chain, table, replaceVersionSpecific(ipv4, params...)...)
 	rb.AppendRuleV6(command, chain, table, replaceVersionSpecific(ipv6, params...)...)
 }
