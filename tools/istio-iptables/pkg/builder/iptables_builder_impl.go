@@ -226,7 +226,7 @@ func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
 		if !chainTableLookupSet.Contains(chainTable) {
 			// Don't delete iptables built-in chains
 			if _, present := constants.BuiltInChainsMap[r.chain]; !present {
-				cmd := []string{"-X", r.chain}
+				cmd := []string{"-t", r.table, "-X", r.chain}
 				output = append(output, cmd)
 				chainTableLookupSet.Insert(chainTable)
 			}
