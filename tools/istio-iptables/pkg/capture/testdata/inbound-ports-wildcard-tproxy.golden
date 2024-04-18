@@ -1,3 +1,24 @@
+iptables -t mangle -I ISTIO_INBOUND 3 -p tcp -i lo -m mark ! --mark 1338 -j RETURN
+iptables -t mangle -I ISTIO_INBOUND 2 -p tcp -s 127.0.0.6/32 -i lo -j RETURN
+iptables -t mangle -I ISTIO_INBOUND 1 -p tcp -m mark --mark 1337 -j RETURN
+iptables -t mangle -D OUTPUT -p tcp -m connmark --mark 1337 -j CONNMARK --restore-mark
+iptables -t mangle -D OUTPUT ! -d 127.0.0.1/32 -p tcp -o lo -m owner --gid-owner 1337 -j MARK --set-mark 1338
+iptables -t mangle -D OUTPUT ! -d 127.0.0.1/32 -p tcp -o lo -m owner --uid-owner 1337 -j MARK --set-mark 1338
+iptables -t mangle -D OUTPUT -p tcp -o lo -m mark --mark 1337 -j RETURN
+iptables -t mangle -D PREROUTING -p tcp -m mark --mark 1337 -j CONNMARK --save-mark
+iptables -t nat -D ISTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp ! --dport 15008 -m owner --gid-owner 1337 -j ISTIO_IN_REDIRECT
+iptables -t nat -D ISTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp ! --dport 15008 -m owner --uid-owner 1337 -j ISTIO_IN_REDIRECT
+iptables -t nat -D OUTPUT -p tcp -j ISTIO_OUTPUT
+iptables -t mangle -D ISTIO_INBOUND -p tcp -j ISTIO_TPROXY
+iptables -t mangle -D ISTIO_INBOUND -p tcp -m conntrack --ctstate RELATED,ESTABLISHED -j ISTIO_DIVERT
+iptables -t mangle -D PREROUTING -p tcp -j ISTIO_INBOUND
+iptables -t mangle -X ISTIO_INBOUND
+iptables -t nat -X ISTIO_OUTPUT
+iptables -t mangle -X ISTIO_TPROXY
+iptables -t mangle -X ISTIO_DIVERT
+iptables -t nat -X ISTIO_IN_REDIRECT
+iptables -t nat -X ISTIO_REDIRECT
+iptables -t nat -X ISTIO_INBOUND
 iptables -t nat -N ISTIO_INBOUND
 iptables -t nat -N ISTIO_REDIRECT
 iptables -t nat -N ISTIO_IN_REDIRECT

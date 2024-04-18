@@ -15,7 +15,6 @@
 package capture
 
 import (
-	"fmt"
 	"net/netip"
 	"path/filepath"
 	"reflect"
@@ -333,45 +332,6 @@ func TestSeparateV4V6(t *testing.T) {
 			}
 			if !reflect.DeepEqual(v6Range, tt.v6) {
 				t.Fatalf("expected %v, got %v", tt.v6, v6Range)
-			}
-		})
-	}
-}
-
-func TestCleanup(t *testing.T) {
-	cases := []struct {
-		name   string
-		config func(cfg *config.Config)
-	}{
-		{
-			"cleanup-empty",
-			func(cfg *config.Config) {
-				cfg.RestoreFormat = true
-			},
-		},
-		{
-			"cleanup-dns",
-			func(cfg *config.Config) {
-				cfg.RedirectDNS = true
-				cfg.DNSServersV4 = []string{"127.0.0.53"}
-				cfg.DNSServersV6 = []string{"::127.0.0.53"}
-				cfg.ProxyGID = "1,2"
-				cfg.ProxyUID = "3,4"
-				cfg.EnableInboundIPv6 = true
-				cfg.RestoreFormat = false
-			},
-		},
-	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := constructTestConfig()
-			tt.config(cfg)
-
-			ext := &dep.DependenciesStub{}
-			iptConfigurator := NewIptablesConfigurator(cfg, ext)
-			iptConfigurator.Run()
-			for _, cmd := range ext.ExecutedQuietly {
-				fmt.Println(cmd)
 			}
 		})
 	}
