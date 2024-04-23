@@ -350,12 +350,16 @@ func TestIdempotentRerun(t *testing.T) {
 	}{
 		{
 			"empty",
-			func(cfg *config.Config) {},
+			func(cfg *config.Config) {
+				cfg.ProxyUID = "0"
+			},
 		},
 		/* TODO
 		{
 			"unexpected-rule",
-			func(cfg *config.Config) {},
+			func(cfg *config.Config) {
+				cfg.ProxyUID = "0"
+			},
 		},
 		*/
 	}
