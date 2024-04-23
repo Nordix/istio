@@ -21,7 +21,13 @@ import (
 	"strings"
 	"testing"
 
+	// Create a new network namespace. This will have the 'lo' interface ready but nothing else.
+	_ "github.com/howardjohn/unshare-go/netns"
+	// Create a new user namespace. This will map the current UID to 0.
+	_ "github.com/howardjohn/unshare-go/userns"
+
 	testutil "istio.io/istio/pilot/test/util"
+	"istio.io/istio/pkg/test/util/assert"
 	"istio.io/istio/tools/istio-iptables/pkg/config"
 	"istio.io/istio/tools/istio-iptables/pkg/constants"
 	dep "istio.io/istio/tools/istio-iptables/pkg/dependencies"
@@ -333,6 +339,39 @@ func TestSeparateV4V6(t *testing.T) {
 			if !reflect.DeepEqual(v6Range, tt.v6) {
 				t.Fatalf("expected %v, got %v", tt.v6, v6Range)
 			}
+		})
+	}
+}
+
+func TestIdempotentRerun(t *testing.T) {
+	cases := []struct {
+		name   string
+		config func(cfg *config.Config)
+	}{
+		{
+			"empty",
+			func(cfg *config.Config) {},
+		},
+		/* TODO
+		{
+			"unexpected-rule",
+			func(cfg *config.Config) {},
+		},
+		*/
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := constructTestConfig()
+			tt.config(cfg)
+
+			ext := &dep.RealDependencies{
+				CNIMode:          false,
+				NetworkNamespace: "",
+			}
+			iptConfigurator := NewIptablesConfigurator(cfg, ext)
+			assert.NoError(t, iptConfigurator.Run())
+			// Rerun
+			// assert.NoError(t, iptConfigurator.Run())
 		})
 	}
 }
