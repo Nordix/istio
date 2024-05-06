@@ -764,65 +764,6 @@ func (cfg *IptablesConfigurator) executeIptablesRestoreCommand(iptVer *dep.Iptab
 	return cfg.ext.Run(constants.IPTablesRestore, iptVer, strings.NewReader(data), "--noflush")
 }
 
-func (cfg *IptablesConfigurator) tryExecuteIptablesRestoreCommand(iptVer *dep.IptablesVersion, data string) {
-	log.Infof("Running iptables restore with: %s and the following input:\n%v", iptVer.CmdToString(constants.IPTablesRestore), strings.TrimSpace(data))
-	// --noflush to prevent flushing/deleting previous contents from table
-	cfg.ext.RunQuietlyAndIgnore(constants.IPTablesRestore, iptVer, strings.NewReader(data), "--noflush")
-}
-
-func (cfg *IptablesConfigurator) getSortedRulesFromSave(data string) string {
-	lines := strings.Split(data, "\n")
-	type ParsedCmd struct {
-		flag  string
-		value string
-	}
-
-	flagRegex := regexp.MustCompile(`-([^\s]+)(?:\s+([^-\s]+))?`)
-	moduleRegex := regexp.MustCompile(`-m\s+\w+\s+`)
-
-	rules := []string{}
-	table := ""
-	for _, line := range lines {
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		if strings.HasPrefix(line, "*") {
-			table = strings.TrimSpace(line[1:])
-			continue
-		}
-		if strings.HasPrefix(line, "-A") || strings.HasPrefix(line, "-I") {
-			rule := fmt.Sprintf("-t %s ", table) + moduleRegex.ReplaceAllString(line, "")
-			matches := flagRegex.FindAllStringSubmatch(rule, -1)
-			// Extract flags and values
-			flagsAndValues := make([]ParsedCmd, len(matches))
-			for i, match := range matches {
-				flagsAndValues[i].flag = match[1]
-				if len(match) > 2 && match[2] != "" {
-					flagsAndValues[i].value = match[2]
-				}
-			}
-			sort.Slice(flagsAndValues, func(i, j int) bool {
-				return flagsAndValues[i].flag < flagsAndValues[j].flag
-			})
-			// Construct the sorted rule
-			var sortedRule string
-			for _, fv := range flagsAndValues {
-				sortedRule += fmt.Sprintf("-%s %s ", fv.flag, fv.value)
-			}
-			rules = append(rules, strings.TrimSpace(sortedRule))
-			continue
-		}
-		if line == "COMMIT" {
-			continue
-		}
-	}
-	sort.Slice(rules, func(i, j int) bool {
-		return rules[i] < rules[j]
-	})
-
-	return strings.Join(rules, "\n")
-}
-
 func (cfg *IptablesConfigurator) getStateFromSave(data string) map[string]map[string][]string {
 	lines := strings.Split(data, "\n")
 	type ParsedCmd struct {
