@@ -314,6 +314,14 @@ func (rb *IptablesRuleBuilder) buildCleanupRulesRestore(rules []*Rule) string {
 	return rb.constructIptablesRestoreContents(tableRulesMap)
 }
 
+func (rb *IptablesRuleBuilder) buildGuardrails() []*Rule {
+	rules := make([]*Rule, 0)
+	rb.insertInternal(&rules, iptableslog.UndefinedCommand, constants.INPUT, constants.FILTER, 1, "-p", "tcp", "-j", "DROP")
+	rb.insertInternal(&rules, iptableslog.UndefinedCommand, constants.FORWARD, constants.FILTER, 1, "-p", "tcp", "-j", "DROP")
+	rb.insertInternal(&rules, iptableslog.UndefinedCommand, constants.OUTPUT, constants.FILTER, 1, "-p", "tcp", "-j", "DROP")
+	return rules
+}
+
 func (rb *IptablesRuleBuilder) BuildV4() [][]string {
 	return rb.buildRules(rb.rules.rulesv4)
 }
@@ -338,12 +346,34 @@ func (rb *IptablesRuleBuilder) BuildCheckV6() [][]string {
 	return rb.buildCheckRules(rb.rules.rulesv6)
 }
 
-func (rb *IptablesRuleBuilder) BuildCleanupV4Restore() string {
-	return rb.buildCleanupRulesRestore(rb.rules.rulesv4)
+func (rb *IptablesRuleBuilder) BuildGuardrails() [][]string {
+	rules := rb.buildGuardrails()
+	output := make([][]string, 0)
+	for _, r := range rules {
+		cmd := append([]string{"-t", r.table}, r.params...)
+		output = append(output, cmd)
+	}
+	return output
 }
 
-func (rb *IptablesRuleBuilder) BuildCleanupV6Restore() string {
-	return rb.buildCleanupRulesRestore(rb.rules.rulesv6)
+func (rb *IptablesRuleBuilder) BuildCheckGuardrails() [][]string {
+	rules := checkRules(rb.buildGuardrails())
+	output := make([][]string, 0)
+	for _, r := range rules {
+		cmd := append([]string{"-t", r.table}, r.params...)
+		output = append(output, cmd)
+	}
+	return output
+}
+
+func (rb *IptablesRuleBuilder) BuildCleanupGuardrails() [][]string {
+	rules := reverseRules(rb.buildGuardrails())
+	output := make([][]string, 0)
+	for _, r := range rules {
+		cmd := append([]string{"-t", r.table}, r.params...)
+		output = append(output, cmd)
+	}
+	return output
 }
 
 func (rb *IptablesRuleBuilder) constructIptablesRestoreContents(tableRulesMap map[string][]string) string {

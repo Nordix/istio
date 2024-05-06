@@ -775,7 +775,7 @@ func (cfg *IptablesConfigurator) getStateFromSave(data string) map[string]map[st
 		result[defaultTable] = make(map[string][]string)
 	}
 
-	flagRegex := regexp.MustCompile(`-{1,2}([^\s]+)(?:\s+([^-\s]+))?`)
+	flagRegex := regexp.MustCompile(`-([^\s]+)(?:\s+([^-\s]+))?`)
 
 	table := ""
 
@@ -805,9 +805,6 @@ func (cfg *IptablesConfigurator) getStateFromSave(data string) map[string]map[st
 		matches := flagRegex.FindAllStringSubmatch(line, -1)
 		flagsAndValues := []ParsedCmd{}
 		for _, match := range matches {
-			if match[1] == "m" || match[1] == "module" {
-				continue
-			}
 			toAdd := ParsedCmd{}
 			toAdd.flag = match[1]
 			if len(match) > 2 && match[2] != "" {
@@ -816,7 +813,7 @@ func (cfg *IptablesConfigurator) getStateFromSave(data string) map[string]map[st
 			flagsAndValues = append(flagsAndValues, toAdd)
 		}
 		for _, el := range flagsAndValues {
-			if el.flag == "A" || el.flag == "append" || el.flag == "-I" || el.flag == "insert" {
+			if el.flag == "A" || el.flag == "-append" || el.flag == "I" || el.flag == "-insert" {
 				chain = el.value
 				break
 			}
@@ -848,8 +845,9 @@ func (cfg *IptablesConfigurator) getStateFromSave(data string) map[string]map[st
 func (cfg *IptablesConfigurator) VerifyRerunStatus(iptVer, ipt6Ver *dep.IptablesVersion) (bool, bool) {
 	applyRequired := false
 	residueFound := false
+
 check_loop:
-	for _, pair := range []struct {
+	for _, ipCfg := range []struct {
 		ver        *dep.IptablesVersion
 		expected   string
 		checkRules [][]string
@@ -857,17 +855,19 @@ check_loop:
 		{iptVer, cfg.ruleBuilder.BuildV4Restore(), cfg.ruleBuilder.BuildCheckV4()},
 		{ipt6Ver, cfg.ruleBuilder.BuildV6Restore(), cfg.ruleBuilder.BuildCheckV6()},
 	} {
-		output, err := cfg.ext.RunWithOutput(constants.IPTablesSave, pair.ver, nil)
+		output, err := cfg.ext.RunWithOutput(constants.IPTablesSave, ipCfg.ver, nil)
 		if err == nil {
 			currentState := cfg.getStateFromSave(output.String())
 			for _, value := range currentState {
-				residueFound = len(value) != 0
 				if residueFound {
-					break check_loop
+					break
 				}
+				residueFound = len(value) != 0
 			}
-
-			expectedState := cfg.getStateFromSave(pair.expected)
+			if !residueFound {
+				continue
+			}
+			expectedState := cfg.getStateFromSave(ipCfg.expected)
 			if len(currentState) != len(expectedState) {
 				applyRequired = true
 				break
@@ -886,7 +886,7 @@ check_loop:
 					}
 				}
 			}
-			err = cfg.executeIptablesCommands(pair.ver, pair.checkRules)
+			err = cfg.executeIptablesCommands(ipCfg.ver, ipCfg.checkRules)
 			if err != nil {
 				applyRequired = true
 				break
@@ -899,18 +899,48 @@ check_loop:
 	if !residueFound {
 		return false, true
 	}
+
+	if residueFound && !applyRequired {
+		log.Info("Found compatible iptables rules/chains, no additional changes are needed")
+	} else if residueFound {
+		log.Info("Found residue of old iptables rules/chains, cleanup is needed")
+	}
+
 	return residueFound, applyRequired
 }
 
 func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVersion) error {
+	guardrails := false
+	defer func() {
+		if guardrails {
+			log.Info("Removing guardrails")
+			guardrailsCleanup := cfg.ruleBuilder.BuildCleanupGuardrails()
+			cfg.executeIptablesCommands(iptVer, guardrailsCleanup)
+			cfg.executeIptablesCommands(ipt6Ver, guardrailsCleanup)
+		}
+	}()
+
 	residueFound, applyRequired := cfg.VerifyRerunStatus(iptVer, ipt6Ver)
-	if residueFound && !applyRequired {
-		log.Info("Found equivalent iptables rules, no additional changes are needed")
-	}
 
 	// Cleanup Step
 	if (residueFound && applyRequired) || cfg.cfg.CleanupOnly {
-		log.Info("Performing cleanup of iptables")
+		// Apply safety guardrails if not there
+		if residueFound {
+			log.Info("Setting up guardrails")
+			guardrailsCleanup := cfg.ruleBuilder.BuildCleanupGuardrails()
+			guardrailsRules := cfg.ruleBuilder.BuildGuardrails()
+			cfg.tryExecuteIptablesCommands(iptVer, guardrailsCleanup)
+			cfg.tryExecuteIptablesCommands(ipt6Ver, guardrailsCleanup)
+			if err := cfg.executeIptablesCommands(iptVer, guardrailsRules); err != nil {
+				return err
+			}
+			guardrails = true
+			if err := cfg.executeIptablesCommands(ipt6Ver, guardrailsRules); err != nil {
+				return err
+			}
+		}
+		// Remove old iptables
+		log.Info("Performing cleanup of existing iptables")
 		cfg.tryExecuteIptablesCommands(iptVer, cfg.ruleBuilder.BuildCleanupV4())
 		cfg.tryExecuteIptablesCommands(ipt6Ver, cfg.ruleBuilder.BuildCleanupV6())
 	}

@@ -15,7 +15,6 @@
 package capture
 
 import (
-	"fmt"
 	"net/netip"
 	"path/filepath"
 	"reflect"
@@ -385,7 +384,6 @@ func TestIdempotentRerun(t *testing.T) {
 				cfg.CleanupOnly = true
 				iptConfigurator := NewIptablesConfigurator(cfg, ext)
 				assert.NoError(t, iptConfigurator.Run())
-				fmt.Println("Veryfing status")
 				residueFound, applyRequired := iptConfigurator.VerifyRerunStatus(&iptVer, &ipt6Ver)
 				assert.Equal(t, residueFound, false)
 				assert.Equal(t, applyRequired, true)
