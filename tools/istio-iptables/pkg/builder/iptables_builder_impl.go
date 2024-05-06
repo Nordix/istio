@@ -73,6 +73,9 @@ func (rb *IptablesRuleBuilder) insertInternal(ipt *[]*Rule, command iptableslog.
 		params: append([]string{"-I", chain, fmt.Sprint(position)}, rules...),
 	})
 	idx := indexOf("-j", params)
+	if idx < 0 && !strings.HasPrefix(chain, "ISTIO_") {
+		log.Warnf("Inserting non-jump rule in non-Istio chain (rule: %s) \n", strings.Join(params, " "))
+	}
 	// We have identified the type of command this is and logging is enabled. Insert a rule to log this chain was hit.
 	// Since this is insert we do this *after* the real chain, which will result in it bumping it forward
 	if rb.cfg.TraceLogging && idx >= 0 && command != iptableslog.UndefinedCommand {
@@ -111,6 +114,9 @@ func indexOf(element string, data []string) int {
 
 func (rb *IptablesRuleBuilder) appendInternal(ipt *[]*Rule, command iptableslog.Command, chain string, table string, params ...string) *IptablesRuleBuilder {
 	idx := indexOf("-j", params)
+	if idx < 0 && !strings.HasPrefix(chain, "ISTIO_") {
+		log.Warnf("Appending non-jump rule in non-Istio chain (rule: %s) \n", strings.Join(params, " "))
+	}
 	// We have identified the type of command this is and logging is enabled. Appending a rule to log this chain will be hit
 	if rb.cfg.TraceLogging && idx >= 0 && command != iptableslog.UndefinedCommand {
 		match := params[:idx]
@@ -176,33 +182,72 @@ func reverseRules(rules []*Rule) []*Rule {
 	for _, r := range rules {
 		var modifiedParams []string
 		skip := false
-		isJump := false
+		insertIndex := -1
 		for i, element := range r.params {
-			if element == "-A" {
+			if insertIndex >= 0 && i == insertIndex+2 {
+				continue
+			}
+			if element == "-A" || element == "--append" {
+				modifiedParams = append(modifiedParams, "-D")
+			} else if element == "-I" || element == "--insert" {
+				insertIndex = i
 				modifiedParams = append(modifiedParams, "-D")
 			} else {
 				modifiedParams = append(modifiedParams, element)
 			}
 
-			if element == "-A" && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
+			if ((element == "-A" || element == "--append") || (element == "-I" || element == "--insert")) && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
 				skip = true
-			} else if element == "-j" && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
+			} else if (element == "-j" || element == "--jump") && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
 				skip = false // Override previous skip if this is a jump-rule
-				isJump = true
 			}
 		}
 		if skip {
 			continue
 		}
 
-		if !isJump {
-			log.Warnf("Found non-jump rule in non-Istio chain (rule: %s) \n", strings.Join(r.params, " "))
+		output = append(output, &Rule{
+			chain:  r.chain,
+			table:  r.table,
+			params: modifiedParams,
+		})
+	}
+	return output
+}
+
+func checkRules(rules []*Rule) []*Rule {
+	output := make([]*Rule, 0)
+	for _, r := range rules {
+		var modifiedParams []string
+		insertIndex := -1
+		for i, element := range r.params {
+			if insertIndex >= 0 && i == insertIndex+2 {
+				continue
+			}
+			if element == "-A" || element == "--append" {
+				modifiedParams = append(modifiedParams, "-C")
+			} else if element == "-I" || element == "--insert" {
+				insertIndex = i
+				modifiedParams = append(modifiedParams, "-C")
+			} else {
+				modifiedParams = append(modifiedParams, element)
+			}
 		}
 		output = append(output, &Rule{
 			chain:  r.chain,
 			table:  r.table,
 			params: modifiedParams,
 		})
+	}
+	return output
+}
+
+func (rb *IptablesRuleBuilder) buildCheckRules(rules []*Rule) [][]string {
+	output := make([][]string, 0)
+	checkRules := checkRules(rules)
+	for _, r := range checkRules {
+		cmd := append([]string{"-t", r.table}, r.params...)
+		output = append(output, cmd)
 	}
 	return output
 }
@@ -226,7 +271,9 @@ func (rb *IptablesRuleBuilder) buildCleanupRules(rules []*Rule) [][]string {
 		if !chainTableLookupSet.Contains(chainTable) {
 			// Don't delete iptables built-in chains
 			if _, present := constants.BuiltInChainsMap[r.chain]; !present {
-				cmd := []string{"-t", r.table, "-X", r.chain}
+				cmd := []string{"-t", r.table, "-F", r.chain}
+				output = append(output, cmd)
+				cmd = []string{"-t", r.table, "-X", r.chain}
 				output = append(output, cmd)
 				chainTableLookupSet.Insert(chainTable)
 			}
@@ -258,6 +305,7 @@ func (rb *IptablesRuleBuilder) buildCleanupRulesRestore(rules []*Rule) string {
 		if !chainTableLookupMap.Contains(chainTable) {
 			// Don't delete iptables built-in chains
 			if _, present := constants.BuiltInChainsMap[r.chain]; !present {
+				tableRulesMap[r.table] = append(tableRulesMap[r.table], fmt.Sprintf("-F %s", r.chain))
 				tableRulesMap[r.table] = append(tableRulesMap[r.table], fmt.Sprintf("-X %s", r.chain))
 				chainTableLookupMap.Insert(chainTable)
 			}
@@ -280,6 +328,14 @@ func (rb *IptablesRuleBuilder) BuildCleanupV4() [][]string {
 
 func (rb *IptablesRuleBuilder) BuildCleanupV6() [][]string {
 	return rb.buildCleanupRules(rb.rules.rulesv6)
+}
+
+func (rb *IptablesRuleBuilder) BuildCheckV4() [][]string {
+	return rb.buildCheckRules(rb.rules.rulesv4)
+}
+
+func (rb *IptablesRuleBuilder) BuildCheckV6() [][]string {
+	return rb.buildCheckRules(rb.rules.rulesv6)
 }
 
 func (rb *IptablesRuleBuilder) BuildCleanupV4Restore() string {

@@ -203,11 +203,16 @@ func mount(src, dst string) error {
 	return syscall.Mount(src, dst, "", syscall.MS_BIND|syscall.MS_RDONLY, "")
 }
 
-func (r *RealDependencies) executeXTables(cmd constants.IptablesCmd, iptVer *IptablesVersion, ignoreErrors bool, stdin io.ReadSeeker, args ...string) error {
+func (r *RealDependencies) executeXTablesWithOutput(cmd constants.IptablesCmd, iptVer *IptablesVersion,
+	ignoreErrors bool, quiet bool, stdin io.ReadSeeker, args ...string,
+) (*bytes.Buffer, error) {
 	mode := "without lock"
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
 	cmdBin := iptVer.CmdToString(cmd)
 	if cmdBin == "" {
-		return fmt.Errorf("called without iptables binary, cannot execute!: %+v", iptVer)
+		return stdout, fmt.Errorf("called without iptables binary, cannot execute!: %+v", iptVer)
 	}
 	var c *exec.Cmd
 	needLock := iptVer.IsWriteCmd(cmd) && !iptVer.NoLocks()
@@ -249,17 +254,25 @@ func (r *RealDependencies) executeXTables(cmd constants.IptablesCmd, iptVer *Ipt
 			c = exec.Command(cmdBin, args...)
 		}
 	}
+	if !quiet {
+		log.Infof("Running command (%s): %s %s", mode, cmdBin, strings.Join(args, " "))
+	}
 
-	log.Infof("Running command (%s): %s %s", mode, cmdBin, strings.Join(args, " "))
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
 	c.Stdout = stdout
 	c.Stderr = stderr
 	c.Stdin = stdin
 	err := run(c)
-	if len(stdout.String()) != 0 {
-		log.Infof("Command output: \n%v", stdout.String())
+	if !quiet {
+		if len(stdout.String()) != 0 {
+			log.Infof("Command output: \n%v", stdout.String())
+		}
+		if err != nil {
+			log.Errorf("Command error output: %v", stderr.String())
+		}
 	}
+	//if err != nil {
+	//	log.Errorf("Command error output: %v", stderr.String())
+	//}
 
 	// TODO Check naming and redirection logic
 	if (err != nil || len(stderr.String()) != 0) && !ignoreErrors {
@@ -273,5 +286,10 @@ func (r *RealDependencies) executeXTables(cmd constants.IptablesCmd, iptVer *Ipt
 		log.Errorf("Command error output: %v", stderrStr)
 	}
 
+	return stdout, err
+}
+
+func (r *RealDependencies) executeXTables(cmd constants.IptablesCmd, iptVer *IptablesVersion, ignoreErrors bool, quiet bool, stdin io.ReadSeeker, args ...string) error {
+	_, err := r.executeXTablesWithOutput(cmd, iptVer, ignoreErrors, false, stdin, args...)
 	return err
 }

@@ -18,6 +18,8 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/vishvananda/netlink"
@@ -768,34 +770,233 @@ func (cfg *IptablesConfigurator) tryExecuteIptablesRestoreCommand(iptVer *dep.Ip
 	cfg.ext.RunQuietlyAndIgnore(constants.IPTablesRestore, iptVer, strings.NewReader(data), "--noflush")
 }
 
-func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVersion) error {
-	if cfg.cfg.RestoreFormat {
-		// Preemptive cleanup
-		cfg.tryExecuteIptablesRestoreCommand(iptVer, cfg.ruleBuilder.BuildCleanupV4Restore())
-		cfg.tryExecuteIptablesRestoreCommand(iptVer, cfg.ruleBuilder.BuildCleanupV6Restore())
+func (cfg *IptablesConfigurator) getSortedRulesFromSave(data string) string {
+	lines := strings.Split(data, "\n")
+	type ParsedCmd struct {
+		flag  string
+		value string
+	}
 
-		// Execute iptables-restore
-		if err := cfg.executeIptablesRestoreCommand(iptVer, cfg.ruleBuilder.BuildV4Restore()); err != nil {
-			return err
-		}
-		// Execute ip6tables-restore
-		if err := cfg.executeIptablesRestoreCommand(ipt6Ver, cfg.ruleBuilder.BuildV6Restore()); err != nil {
-			return err
-		}
-	} else {
-		// Preemptive cleanup
-		cfg.tryExecuteIptablesCommands(iptVer, cfg.ruleBuilder.BuildCleanupV4())
-		cfg.tryExecuteIptablesCommands(ipt6Ver, cfg.ruleBuilder.BuildCleanupV6())
+	flagRegex := regexp.MustCompile(`-([^\s]+)(?:\s+([^-\s]+))?`)
+	moduleRegex := regexp.MustCompile(`-m\s+\w+\s+`)
 
-		// Execute iptables commands
-		if err := cfg.executeIptablesCommands(iptVer, cfg.ruleBuilder.BuildV4()); err != nil {
-			return err
+	rules := []string{}
+	table := ""
+	for _, line := range lines {
+		if strings.HasPrefix(line, "#") {
+			continue
 		}
-
-		// Execute ip6tables commands
-		if err := cfg.executeIptablesCommands(ipt6Ver, cfg.ruleBuilder.BuildV6()); err != nil {
-			return err
+		if strings.HasPrefix(line, "*") {
+			table = strings.TrimSpace(line[1:])
+			continue
+		}
+		if strings.HasPrefix(line, "-A") || strings.HasPrefix(line, "-I") {
+			rule := fmt.Sprintf("-t %s ", table) + moduleRegex.ReplaceAllString(line, "")
+			matches := flagRegex.FindAllStringSubmatch(rule, -1)
+			// Extract flags and values
+			flagsAndValues := make([]ParsedCmd, len(matches))
+			for i, match := range matches {
+				flagsAndValues[i].flag = match[1]
+				if len(match) > 2 && match[2] != "" {
+					flagsAndValues[i].value = match[2]
+				}
+			}
+			sort.Slice(flagsAndValues, func(i, j int) bool {
+				return flagsAndValues[i].flag < flagsAndValues[j].flag
+			})
+			// Construct the sorted rule
+			var sortedRule string
+			for _, fv := range flagsAndValues {
+				sortedRule += fmt.Sprintf("-%s %s ", fv.flag, fv.value)
+			}
+			rules = append(rules, strings.TrimSpace(sortedRule))
+			continue
+		}
+		if line == "COMMIT" {
+			continue
 		}
 	}
+	sort.Slice(rules, func(i, j int) bool {
+		return rules[i] < rules[j]
+	})
+
+	return strings.Join(rules, "\n")
+}
+
+func (cfg *IptablesConfigurator) getStateFromSave(data string) map[string]map[string][]string {
+	lines := strings.Split(data, "\n")
+	type ParsedCmd struct {
+		flag  string
+		value string
+	}
+	result := make(map[string]map[string][]string)
+	for _, defaultTable := range []string{constants.FILTER, constants.NAT, constants.MANGLE, constants.RAW} {
+		result[defaultTable] = make(map[string][]string)
+	}
+
+	flagRegex := regexp.MustCompile(`-{1,2}([^\s]+)(?:\s+([^-\s]+))?`)
+
+	table := ""
+
+	for _, line := range lines {
+		chain := ""
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#") || line == "COMMIT" {
+			continue
+		}
+		if strings.HasPrefix(line, "*") {
+			table = strings.TrimSpace(line[1:])
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			if !strings.HasPrefix(line, ":ISTIO") {
+				continue
+			}
+			chain := strings.Split(line, " ")[0][1:]
+			_, ok := result[table][chain]
+			if !ok {
+				result[table][chain] = []string{}
+			}
+			continue
+		}
+		matches := flagRegex.FindAllStringSubmatch(line, -1)
+		flagsAndValues := []ParsedCmd{}
+		for _, match := range matches {
+			if match[1] == "m" || match[1] == "module" {
+				continue
+			}
+			toAdd := ParsedCmd{}
+			toAdd.flag = match[1]
+			if len(match) > 2 && match[2] != "" {
+				toAdd.value = match[2]
+			}
+			flagsAndValues = append(flagsAndValues, toAdd)
+		}
+		for _, el := range flagsAndValues {
+			if el.flag == "A" || el.flag == "append" || el.flag == "-I" || el.flag == "insert" {
+				chain = el.value
+				break
+			}
+		}
+		if chain == "" {
+			continue
+		}
+
+		// Construct the sorted rule
+		var sortedRule string
+		sort.Slice(flagsAndValues, func(i, j int) bool {
+			return flagsAndValues[i].flag < flagsAndValues[j].flag
+		})
+		for _, fv := range flagsAndValues {
+			sortedRule += fmt.Sprintf("-%s %s ", fv.flag, fv.value)
+		}
+		sortedRule = strings.TrimSpace(sortedRule)
+
+		_, ok := result[table][chain]
+		if !ok {
+			result[table][chain] = []string{}
+		}
+		result[table][chain] = append(result[table][chain], sortedRule)
+
+	}
+	return result
+}
+
+func (cfg *IptablesConfigurator) VerifyRerunStatus(iptVer, ipt6Ver *dep.IptablesVersion) (bool, bool) {
+	applyRequired := false
+	residueFound := false
+check_loop:
+	for _, pair := range []struct {
+		ver        *dep.IptablesVersion
+		expected   string
+		checkRules [][]string
+	}{
+		{iptVer, cfg.ruleBuilder.BuildV4Restore(), cfg.ruleBuilder.BuildCheckV4()},
+		{ipt6Ver, cfg.ruleBuilder.BuildV6Restore(), cfg.ruleBuilder.BuildCheckV6()},
+	} {
+		output, err := cfg.ext.RunWithOutput(constants.IPTablesSave, pair.ver, nil)
+		if err == nil {
+			currentState := cfg.getStateFromSave(output.String())
+			for _, value := range currentState {
+				residueFound = len(value) != 0
+				if residueFound {
+					break check_loop
+				}
+			}
+
+			expectedState := cfg.getStateFromSave(pair.expected)
+			if len(currentState) != len(expectedState) {
+				applyRequired = true
+				break
+			}
+			for table, chains := range expectedState {
+				_, ok := currentState[table]
+				if !ok {
+					applyRequired = true
+					break check_loop
+				}
+				for chain, rules := range chains {
+					_, ok := currentState[table][chain]
+					if !ok || len(rules) != len(currentState[table][chain]) {
+						applyRequired = true
+						break check_loop
+					}
+				}
+			}
+			err = cfg.executeIptablesCommands(pair.ver, pair.checkRules)
+			if err != nil {
+				applyRequired = true
+				break
+			}
+		}
+
+	}
+
+	// If there are no residue, apply step is always needed
+	if !residueFound {
+		return false, true
+	}
+	return residueFound, applyRequired
+}
+
+func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVersion) error {
+	residueFound, applyRequired := cfg.VerifyRerunStatus(iptVer, ipt6Ver)
+	if residueFound && !applyRequired {
+		log.Info("Found equivalent iptables rules, no additional changes are needed")
+	}
+
+	// Cleanup Step
+	if (residueFound && applyRequired) || cfg.cfg.CleanupOnly {
+		log.Info("Performing cleanup of iptables")
+		cfg.tryExecuteIptablesCommands(iptVer, cfg.ruleBuilder.BuildCleanupV4())
+		cfg.tryExecuteIptablesCommands(ipt6Ver, cfg.ruleBuilder.BuildCleanupV6())
+	}
+
+	// Apply Step
+	if applyRequired && !cfg.cfg.CleanupOnly {
+		log.Info("Applying iptables chains and rules")
+		if cfg.cfg.RestoreFormat {
+			// Execute iptables-restore
+			if err := cfg.executeIptablesRestoreCommand(iptVer, cfg.ruleBuilder.BuildV4Restore()); err != nil {
+				return err
+			}
+			// Execute ip6tables-restore
+			if err := cfg.executeIptablesRestoreCommand(ipt6Ver, cfg.ruleBuilder.BuildV6Restore()); err != nil {
+				return err
+			}
+		} else {
+			// Execute iptables commands
+			if err := cfg.executeIptablesCommands(iptVer, cfg.ruleBuilder.BuildV4()); err != nil {
+				return err
+			}
+			// Execute ip6tables commands
+			if err := cfg.executeIptablesCommands(ipt6Ver, cfg.ruleBuilder.BuildV6()); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }

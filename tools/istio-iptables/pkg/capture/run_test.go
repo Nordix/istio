@@ -15,6 +15,7 @@
 package capture
 
 import (
+	"fmt"
 	"net/netip"
 	"path/filepath"
 	"reflect"
@@ -23,7 +24,7 @@ import (
 
 	// Create a new network namespace. This will have the 'lo' interface ready but nothing else.
 	_ "github.com/howardjohn/unshare-go/netns"
-	// Create a new user namespace. This will map the current UID to 0.
+	// Create a new user namespace. This will map the current UID/GID to 0.
 	_ "github.com/howardjohn/unshare-go/userns"
 
 	testutil "istio.io/istio/pilot/test/util"
@@ -48,8 +49,11 @@ func constructTestConfig() *config.Config {
 	}
 }
 
-func TestIptables(t *testing.T) {
-	cases := []struct {
+func getCommonTestCases() []struct {
+	name   string
+	config func(cfg *config.Config)
+} {
+	return []struct {
 		name   string
 		config func(cfg *config.Config)
 	}{
@@ -277,7 +281,10 @@ func TestIptables(t *testing.T) {
 			},
 		},
 	}
-	for _, tt := range cases {
+}
+
+func TestIptables(t *testing.T) {
+	for _, tt := range getCommonTestCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := constructTestConfig()
 			tt.config(cfg)
@@ -344,38 +351,56 @@ func TestSeparateV4V6(t *testing.T) {
 }
 
 func TestIdempotentRerun(t *testing.T) {
-	cases := []struct {
-		name   string
-		config func(cfg *config.Config)
-	}{
-		{
-			"empty",
-			func(cfg *config.Config) {
-				cfg.ProxyUID = "0"
-			},
-		},
-		/* TODO
-		{
-			"unexpected-rule",
-			func(cfg *config.Config) {
-				cfg.ProxyUID = "0"
-			},
-		},
-		*/
+	commonCases := getCommonTestCases()
+	ext := &dep.RealDependencies{
+		CNIMode:          false,
+		NetworkNamespace: "",
 	}
-	for _, tt := range cases {
+	iptVer, err := ext.DetectIptablesVersion(false)
+	if err != nil {
+		t.Fatalf("Can't detect iptables version")
+	}
+
+	ipt6Ver, err := ext.DetectIptablesVersion(true)
+	if err != nil {
+		t.Fatalf("Can't detect ip6tables version")
+	}
+
+	for _, tt := range commonCases {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := constructTestConfig()
 			tt.config(cfg)
-
-			ext := &dep.RealDependencies{
-				CNIMode:          false,
-				NetworkNamespace: "",
+			// Override UID and GID otherwise test will fail in the linux namespace from unshare-go lib
+			cfg.ProxyUID = "0"
+			cfg.ProxyGID = "0"
+			if cfg.OwnerGroupsExclude != "" {
+				cfg.OwnerGroupsInclude = "0"
 			}
+			if cfg.OwnerGroupsInclude != "" {
+				cfg.OwnerGroupsInclude = "0"
+			}
+
+			defer func() {
+				// Final Cleanup
+				cfg.CleanupOnly = true
+				iptConfigurator := NewIptablesConfigurator(cfg, ext)
+				assert.NoError(t, iptConfigurator.Run())
+				fmt.Println("Veryfing status")
+				residueFound, applyRequired := iptConfigurator.VerifyRerunStatus(&iptVer, &ipt6Ver)
+				assert.Equal(t, residueFound, false)
+				assert.Equal(t, applyRequired, true)
+			}()
+
+			// First Pass
 			iptConfigurator := NewIptablesConfigurator(cfg, ext)
 			assert.NoError(t, iptConfigurator.Run())
-			// Rerun
-			// assert.NoError(t, iptConfigurator.Run())
+			residueFound, applyRequired := iptConfigurator.VerifyRerunStatus(&iptVer, &ipt6Ver)
+			assert.Equal(t, residueFound, true)
+			assert.Equal(t, applyRequired, false)
+
+			// Second Pass
+			iptConfigurator = NewIptablesConfigurator(cfg, ext)
+			assert.NoError(t, iptConfigurator.Run())
 		})
 	}
 }

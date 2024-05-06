@@ -106,6 +106,7 @@ const (
 	CaptureAllDNS             = "capture-all-dns"
 	NetworkNamespace          = "network-namespace"
 	CNIMode                   = "cni-mode"
+	CleanupOnly               = "cleanup-only"
 )
 
 // Environment variables that deliberately have no equivalent command-line flags.
