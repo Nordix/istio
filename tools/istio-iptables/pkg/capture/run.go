@@ -779,6 +779,7 @@ func (cfg *IptablesConfigurator) getStateFromSave(data string) map[string]map[st
 		result[defaultTable] = make(map[string][]string)
 	}
 
+	// Regex to match a flag (-<name>) and its value. Both are captured into two different groups.
 	flagRegex := regexp.MustCompile(`-([^\s]+)(?:\s+([^-\s]+))?`)
 
 	table := ""
@@ -847,8 +848,9 @@ func (cfg *IptablesConfigurator) getStateFromSave(data string) map[string]map[st
 }
 
 func (cfg *IptablesConfigurator) VerifyRerunStatus(iptVer, ipt6Ver *dep.IptablesVersion) (bool, bool) {
-	applyRequired := false
-	residueFound := false
+	// These variables track the status of the verification
+	deltaExists := false // Flag to indicate if a difference is found between expected and current state
+	reconcile := false   // Flag to indicate if a reconciliation via cleanup is needed
 
 check_loop:
 	for _, ipCfg := range []struct {
@@ -863,50 +865,50 @@ check_loop:
 		if err == nil {
 			currentState := cfg.getStateFromSave(output.String())
 			for _, value := range currentState {
-				if residueFound {
+				if deltaExists {
 					break
 				}
-				residueFound = len(value) != 0
+				deltaExists = len(value) != 0
 			}
-			if !residueFound {
+			if !deltaExists {
 				continue
 			}
 			expectedState := cfg.getStateFromSave(ipCfg.expected)
 			for table, chains := range expectedState {
 				_, ok := currentState[table]
 				if !ok {
-					applyRequired = true
+					reconcile = true
 					break check_loop
 				}
 				for chain, rules := range chains {
 					currentRules, ok := currentState[table][chain]
 					if !ok || (strings.HasPrefix(chain, "ISTIO_") && len(rules) != len(currentRules)) {
-						applyRequired = true
+						reconcile = true
 						break check_loop
 					}
 				}
 			}
 			err = cfg.executeIptablesCommands(ipCfg.ver, ipCfg.checkRules)
 			if err != nil {
-				applyRequired = true
+				reconcile = true
 				break
 			}
 		}
 
 	}
 
-	// If there are no residue, apply step is always needed
-	if !residueFound {
-		return false, true
+	// If no delta is found, reconcile is never needed
+	if !deltaExists {
+		return false, false
 	}
 
-	if residueFound && !applyRequired {
-		log.Info("Found compatible iptables rules/chains, no additional changes are needed")
-	} else if residueFound {
-		log.Info("Found residue of old iptables rules/chains, cleanup is needed")
+	if deltaExists && !reconcile {
+		log.Info("Found compatible iptables rules/chains, no reconciliation needed")
+	} else if deltaExists {
+		log.Info("Found residue of old iptables rules/chains, reconciliation is needed")
 	}
 
-	return residueFound, applyRequired
+	return deltaExists, reconcile
 }
 
 func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVersion) error {
@@ -920,11 +922,12 @@ func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVe
 		}
 	}()
 
+	deltaExists, reconcile := cfg.VerifyRerunStatus(iptVer, ipt6Ver)
 	residueFound, applyRequired := cfg.VerifyRerunStatus(iptVer, ipt6Ver)
 	// Cleanup Step
-	if (residueFound && applyRequired && !cfg.cfg.NoReconcile) || cfg.cfg.CleanupOnly {
+	if (deltaExists && reconcile) || cfg.cfg.CleanupOnly {
 		// Apply safety guardrails
-		if residueFound {
+		if deltaExists {
 			log.Info("Setting up guardrails")
 			guardrailsCleanup := cfg.ruleBuilder.BuildCleanupGuardrails()
 			guardrailsRules := cfg.ruleBuilder.BuildGuardrails()
@@ -943,7 +946,7 @@ func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVe
 	}
 
 	// Apply Step
-	if applyRequired && !cfg.cfg.CleanupOnly {
+	if deltaExists && !cfg.cfg.CleanupOnly {
 		log.Info("Applying iptables chains and rules")
 		if cfg.cfg.RestoreFormat {
 			// Execute iptables-restore

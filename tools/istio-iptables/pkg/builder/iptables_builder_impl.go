@@ -213,6 +213,7 @@ func reverseRules(rules []*Rule) []*Rule {
 			params: modifiedParams,
 		})
 	}
+	log.Debugf("Reversed rules to %+v", output)
 	return output
 }
 
@@ -240,6 +241,7 @@ func checkRules(rules []*Rule) []*Rule {
 			params: modifiedParams,
 		})
 	}
+	log.Debugf("Rules mutated into check-rules %+v", output)
 	return output
 }
 
