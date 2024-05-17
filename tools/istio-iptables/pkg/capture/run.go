@@ -923,7 +923,9 @@ func (cfg *IptablesConfigurator) executeCommands(iptVer, ipt6Ver *dep.IptablesVe
 	}()
 
 	deltaExists, reconcile := cfg.VerifyRerunStatus(iptVer, ipt6Ver)
-	residueFound, applyRequired := cfg.VerifyRerunStatus(iptVer, ipt6Ver)
+	if deltaExists && reconcile && cfg.cfg.NoReconcile {
+		return fmt.Errorf("reconcile is needed but --no-reconcile flag was used. Can't recover from this state")
+	}
 	// Cleanup Step
 	if (deltaExists && reconcile) || cfg.cfg.CleanupOnly {
 		// Apply safety guardrails
