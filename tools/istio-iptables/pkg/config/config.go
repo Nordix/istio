@@ -87,7 +87,7 @@ type Config struct {
 	DualStack               bool          `json:"DUAL_STACK"`
 	HostIP                  netip.Addr    `json:"HOST_IP"`
 	HostIPv4LoopbackCidr    string        `json:"HOST_IPV4_LOOPBACK_CIDR"`
-	SkipCleanup             bool          `json:"SKIP_CLEANUP"`
+	NoReconcile             bool          `json:"NO_RECONCILE"`
 	CleanupOnly             bool          `json:"CLEANUP_ONLY"`
 }
 

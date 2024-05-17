@@ -137,7 +137,7 @@ templates:
         - "--run-validation"
         - "--skip-rule-apply"
         {{ else -}}
-        - "--skip-cleanup"
+        - "--no-reconcile"
         {{ end -}}
         {{with .Values.global.imagePullPolicy }}imagePullPolicy: "{{.}}"{{end}}
       {{- if .ProxyConfig.ProxyMetadata }}

@@ -137,7 +137,8 @@ func bindCmdlineFlags(cfg *config.Config, cmd *cobra.Command) {
 
 	flag.BindEnv(fs, constants.CNIMode, "", "Whether to run as CNI plugin.", &cfg.CNIMode)
 
-	flag.BindEnv(fs, constants.SkipCleanup, "", "Skip cleanup of pre-existing and incompatible iptables rules", &cfg.SkipCleanup)
+	flag.BindEnv(fs, constants.NoReconcile, "", "Skip reconciliation of pre-existing and incompatible iptables rules, failing instead if drift detected",
+		&cfg.NoReconcile)
 
 	flag.BindEnv(fs, constants.CleanupOnly, "", "Perform a forced cleanup without creating new iptables chains or rules.",
 		&cfg.CleanupOnly)

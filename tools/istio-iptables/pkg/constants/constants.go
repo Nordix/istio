@@ -106,7 +106,7 @@ const (
 	CaptureAllDNS             = "capture-all-dns"
 	NetworkNamespace          = "network-namespace"
 	CNIMode                   = "cni-mode"
-	SkipCleanup               = "skip-cleanup"
+	NoReconcile               = "no-reconcile"
 	CleanupOnly               = "cleanup-only"
 )
 
