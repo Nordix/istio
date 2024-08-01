@@ -71,6 +71,7 @@ func NewServer(ctx context.Context, ready *atomic.Value, pluginSocket string, ar
 		RestoreFormat: true,
 		RedirectDNS:   args.DNSCapture,
 		EnableIPv6:    args.EnableIPv6,
+		Reconcile:     true,
 	}
 
 	log.Debug("creating ipsets in the node netns")
@@ -91,7 +92,7 @@ func NewServer(ctx context.Context, ready *atomic.Value, pluginSocket string, ar
 	}
 
 	// Create hostprobe rules now, in the host netns
-	hostIptables.DeleteHostRules()
+	hostIptables.DeleteHostRules(&HostProbeSNATIP, &HostProbeSNATIPV6)
 
 	if err := hostIptables.CreateHostRulesForHealthChecks(&HostProbeSNATIP, &HostProbeSNATIPV6); err != nil {
 		return nil, fmt.Errorf("error initializing the host rules for health checks: %w", err)

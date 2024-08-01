@@ -24,6 +24,7 @@ import (
 	"istio.io/istio/cni/pkg/scopes"
 	istiolog "istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/ptr"
+	"istio.io/istio/pkg/slices"
 	"istio.io/istio/tools/istio-iptables/pkg/builder"
 	iptablesconfig "istio.io/istio/tools/istio-iptables/pkg/config"
 	iptablesconstants "istio.io/istio/tools/istio-iptables/pkg/constants"
@@ -57,6 +58,8 @@ type Config struct {
 	TraceLogging  bool `json:"IPTABLES_TRACE_LOGGING"`
 	EnableIPv6    bool `json:"ENABLE_INBOUND_IPV6"`
 	RedirectDNS   bool `json:"REDIRECT_DNS"`
+	Reconcile     bool `json:"RECONCILE"`
+	CleanupOnly   bool `json:"CLEANUP_ONLY"`
 }
 
 type IptablesConfigurator struct {
@@ -73,6 +76,8 @@ func ipbuildConfig(c *Config) *iptablesconfig.Config {
 		TraceLogging:  c.TraceLogging,
 		EnableIPv6:    c.EnableIPv6,
 		RedirectDNS:   c.RedirectDNS,
+		Reconcile:     c.Reconcile,
+		CleanupOnly:   c.CleanupOnly,
 	}
 }
 
@@ -85,6 +90,7 @@ func NewIptablesConfigurator(
 	if cfg == nil {
 		cfg = &Config{
 			RestoreFormat: true,
+			Reconcile:     true,
 		}
 	}
 
@@ -132,55 +138,33 @@ func NewIptablesConfigurator(
 	return configurator, inPodConfigurator, nil
 }
 
-func (cfg *IptablesConfigurator) DeleteInpodRules() error {
+func (cfg *IptablesConfigurator) DeleteInpodRules(hostProbeSNAT, hostProbeV6SNAT *netip.Addr) error {
 	var inpodErrs []error
 
 	log.Debug("Deleting iptables rules")
+	builder := cfg.appendInpodRules(hostProbeSNAT, hostProbeV6SNAT)
 
-	inpodErrs = append(inpodErrs, cfg.executeDeleteCommands(), cfg.delInpodMarkIPRule(), cfg.delLoopbackRoute())
-	return errors.Join(inpodErrs...)
-}
-
-func (cfg *IptablesConfigurator) executeDeleteCommands() error {
-	deleteCmds := [][]string{
-		{"-t", iptablesconstants.MANGLE, "-D", iptablesconstants.PREROUTING, "-j", ChainInpodPrerouting},
-		{"-t", iptablesconstants.MANGLE, "-D", iptablesconstants.OUTPUT, "-j", ChainInpodOutput},
-		{"-t", iptablesconstants.NAT, "-D", iptablesconstants.OUTPUT, "-j", ChainInpodOutput},
-	}
-
-	// these sometimes fail due to "Device or resource busy"
-	optionalDeleteCmds := [][]string{
-		// flush-then-delete our created chains
-		{"-t", iptablesconstants.MANGLE, "-F", ChainInpodPrerouting},
-		{"-t", iptablesconstants.MANGLE, "-F", ChainInpodOutput},
-		{"-t", iptablesconstants.NAT, "-F", ChainInpodOutput},
-		{"-t", iptablesconstants.MANGLE, "-X", ChainInpodPrerouting},
-		{"-t", iptablesconstants.MANGLE, "-X", ChainInpodOutput},
-		{"-t", iptablesconstants.NAT, "-X", ChainInpodOutput},
-	}
-
-	var delErrs []error
-
-	iptablesVariant := []dep.IptablesVersion{}
-	iptablesVariant = append(iptablesVariant, cfg.iptV)
-
-	if cfg.cfg.EnableIPv6 {
-		iptablesVariant = append(iptablesVariant, cfg.ipt6V)
-	}
-
-	for _, iptVer := range iptablesVariant {
-		for _, cmd := range deleteCmds {
-			delErrs = append(delErrs, cfg.ext.Run(iptablesconstants.IPTables, &iptVer, nil, cmd...))
-		}
-
-		for _, cmd := range optionalDeleteCmds {
-			err := cfg.ext.Run(iptablesconstants.IPTables, &iptVer, nil, cmd...)
-			if err != nil {
+	runCommands := func(cmds [][]string, version *dep.IptablesVersion) []error {
+		var errs []error
+		for _, cmd := range cmds {
+			err := cfg.ext.Run(iptablesconstants.IPTables, version, nil, cmd...)
+			if err != nil && (slices.Contains(cmd, "-F") || slices.Contains(cmd, "-X")) {
 				log.Debugf("ignoring error deleting optional iptables rule: %v", err)
+			} else {
+				errs = append(errs, err)
 			}
 		}
+		return errs
 	}
-	return errors.Join(delErrs...)
+
+	inpodErrs = append(inpodErrs, runCommands(builder.BuildCleanupV4(), &cfg.iptV)...)
+
+	if cfg.cfg.EnableIPv6 {
+		inpodErrs = append(inpodErrs, runCommands(builder.BuildCleanupV6(), &cfg.ipt6V)...)
+	}
+
+	inpodErrs = append(inpodErrs, cfg.delInpodMarkIPRule(), cfg.delLoopbackRoute())
+	return errors.Join(inpodErrs...)
 }
 
 // Setup iptables rules for in-pod mode. Ideally this should be an idempotent function.
@@ -390,24 +374,142 @@ func (cfg *IptablesConfigurator) appendInpodRules(hostProbeSNAT, hostProbeV6SNAT
 	return iptablesBuilder
 }
 
+// VerifyIptablesState function verifies the current iptables state against the expected state.
+// The current state is considered equal to the expected state if the following three conditions are met:
+//   - Every ISTIO_* chain in the expected state must also exist in the current state.
+//   - Every ISTIO_* chain must have the same number of elements in both the current and expected state.
+//   - Every rule in the expected state (whether it is in an ISTIO or non-ISTIO chain) must also exist in the current state.
+//     The verification is performed by using "iptables -C" on the rule produced by our iptables builder. No comparison of the parsed rules is done.
+//
+// Note: The order of the rules is not checked and is not used to determine the equivalence of the two states.
+// The function returns two boolean values, the first one indicates whether residues exist,
+// and the second one indicates whether differences were found between the current and expected state.
+func (cfg *IptablesConfigurator) VerifyIptablesState(builder *builder.IptablesRuleBuilder, iptVer, ipt6Ver *dep.IptablesVersion) (bool, bool) {
+	// These variables track the status of iptables installation
+	residueExists := false // Flag to indicate if iptables residues from previous executions are found
+	deltaExists := false   // Flag to indicate if a difference is found between expected and current state
+
+check_loop:
+	for _, ipCfg := range []struct {
+		ver        *dep.IptablesVersion
+		expected   string
+		checkRules [][]string
+	}{
+		{iptVer, builder.BuildV4Restore(), builder.BuildCheckV4()},
+		{ipt6Ver, builder.BuildV6Restore(), builder.BuildCheckV6()},
+	} {
+		output, err := cfg.ext.RunWithOutput(iptablesconstants.IPTablesSave, ipCfg.ver, nil)
+		if err == nil {
+			currentState := builder.GetStateFromSave(output.String())
+			log.Debugf("Current iptables state: %#v", currentState)
+			for _, value := range currentState {
+				if residueExists {
+					break
+				}
+				residueExists = len(value) != 0
+			}
+			if !residueExists {
+				continue
+			}
+			expectedState := builder.GetStateFromSave(ipCfg.expected)
+			log.Debugf("Expected iptables state: %#v", expectedState)
+			for table, chains := range expectedState {
+				_, ok := currentState[table]
+				if !ok {
+					deltaExists = true
+					log.Debugf("Can't find expected table %s in current state", table)
+					break check_loop
+				}
+				for chain, rules := range chains {
+					currentRules, ok := currentState[table][chain]
+					if !ok || (strings.HasPrefix(chain, "ISTIO_") && len(rules) != len(currentRules)) {
+						deltaExists = true
+						log.Debugf("Mismatching number of rules in chain %s between current and expected state", chain)
+						break check_loop
+					}
+				}
+			}
+			err = cfg.executeIptablesCommands(ipCfg.ver, ipCfg.checkRules)
+			if err != nil {
+				deltaExists = true
+				log.Debugf("iptables check rules failed")
+				break
+			}
+		}
+
+	}
+
+	if !residueExists {
+		log.Info("Clean-state detected, new iptables are needed")
+		return false, true
+	}
+
+	if deltaExists {
+		log.Warn("Found residues of old iptables rules/chains, reconciliation is needed")
+	} else {
+		log.Warn("Found compatible residues of old iptables rules/chains, reconciliation not needed")
+	}
+
+	return residueExists, deltaExists
+}
+
 func (cfg *IptablesConfigurator) executeCommands(log *istiolog.Scope, iptablesBuilder *builder.IptablesRuleBuilder) error {
+	guardrails := false
+	defer func() {
+		if guardrails {
+			log.Info("Removing guardrails")
+			guardrailsCleanup := iptablesBuilder.BuildCleanupGuardrails()
+			_ = cfg.executeIptablesCommands(&cfg.iptV, guardrailsCleanup)
+			_ = cfg.executeIptablesCommands(&cfg.ipt6V, guardrailsCleanup)
+		}
+	}()
+
+	residueExists, deltaExists := cfg.VerifyIptablesState(iptablesBuilder, &cfg.iptV, &cfg.ipt6V)
+	if residueExists && deltaExists && !cfg.cfg.Reconcile {
+		return fmt.Errorf("reconcile is needed but no-reconcile flag is set. Can't recover from this state")
+	}
+
+	// Cleanup Step
+	if (residueExists && deltaExists) || cfg.cfg.CleanupOnly {
+		// Apply safety guardrails
+		if !cfg.cfg.CleanupOnly {
+			log.Info("Setting up guardrails")
+			guardrailsCleanup := iptablesBuilder.BuildCleanupGuardrails()
+			guardrailsRules := iptablesBuilder.BuildGuardrails()
+			for _, ver := range []*dep.IptablesVersion{&cfg.iptV, &cfg.ipt6V} {
+				cfg.tryExecuteIptablesCommands(ver, guardrailsCleanup)
+				if err := cfg.executeIptablesCommands(ver, guardrailsRules); err != nil {
+					return err
+				}
+				guardrails = true
+			}
+		}
+		// Remove old iptables
+		log.Info("Performing cleanup of existing iptables")
+		cfg.tryExecuteIptablesCommands(&cfg.iptV, iptablesBuilder.BuildCleanupV4())
+		cfg.tryExecuteIptablesCommands(&cfg.ipt6V, iptablesBuilder.BuildCleanupV6())
+	}
+
 	var execErrs []error
 
-	if cfg.cfg.RestoreFormat {
-		// Execute iptables-restore
-		execErrs = append(execErrs, cfg.executeIptablesRestoreCommand(log, iptablesBuilder.BuildV4Restore(), &cfg.iptV))
-		// Execute ip6tables-restore
-		if cfg.cfg.EnableIPv6 {
-			execErrs = append(execErrs, cfg.executeIptablesRestoreCommand(log, iptablesBuilder.BuildV6Restore(), &cfg.ipt6V))
-		}
-	} else {
-		// Execute iptables commands
-		execErrs = append(execErrs,
-			cfg.executeIptablesCommands(&cfg.iptV, iptablesBuilder.BuildV4()))
-		// Execute ip6tables commands
-		if cfg.cfg.EnableIPv6 {
+	if deltaExists && !cfg.cfg.CleanupOnly {
+		log.Info("Applying iptables chains and rules")
+		if cfg.cfg.RestoreFormat {
+			// Execute iptables-restore
+			execErrs = append(execErrs, cfg.executeIptablesRestoreCommand(log, iptablesBuilder.BuildV4Restore(), &cfg.iptV))
+			// Execute ip6tables-restore
+			if cfg.cfg.EnableIPv6 {
+				execErrs = append(execErrs, cfg.executeIptablesRestoreCommand(log, iptablesBuilder.BuildV6Restore(), &cfg.ipt6V))
+			}
+		} else {
+			// Execute iptables commands
 			execErrs = append(execErrs,
-				cfg.executeIptablesCommands(&cfg.ipt6V, iptablesBuilder.BuildV6()))
+				cfg.executeIptablesCommands(&cfg.iptV, iptablesBuilder.BuildV4()))
+			// Execute ip6tables commands
+			if cfg.cfg.EnableIPv6 {
+				execErrs = append(execErrs,
+					cfg.executeIptablesCommands(&cfg.ipt6V, iptablesBuilder.BuildV6()))
+			}
 		}
 	}
 	return errors.Join(execErrs...)
@@ -420,6 +522,12 @@ func (cfg *IptablesConfigurator) executeIptablesCommands(iptVer *dep.IptablesVer
 		iptErrs = append(iptErrs, cfg.ext.Run(iptablesconstants.IPTables, iptVer, nil, argSet...))
 	}
 	return errors.Join(iptErrs...)
+}
+
+func (cfg *IptablesConfigurator) tryExecuteIptablesCommands(iptVer *dep.IptablesVersion, commands [][]string) {
+	for _, cmd := range commands {
+		cfg.ext.RunQuietlyAndIgnore(iptablesconstants.IPTables, iptVer, nil, cmd...)
+	}
 }
 
 func (cfg *IptablesConfigurator) executeIptablesRestoreCommand(
@@ -458,6 +566,7 @@ func (cfg *IptablesConfigurator) delInpodMarkIPRule() error {
 // - kube-proxy (fowarded/proxied traffic from LoadBalancer-backed services, potentially with public IPs, which we must capture)
 func (cfg *IptablesConfigurator) CreateHostRulesForHealthChecks(hostSNATIP, hostSNATIPV6 *netip.Addr) error {
 	// Append our rules here
+	log.Info("configuring host-level iptables rules (healthchecks, etc)")
 	builder := cfg.appendHostRules(hostSNATIP, hostSNATIPV6)
 
 	log.Info("Adding host netnamespace iptables rules")
@@ -469,40 +578,24 @@ func (cfg *IptablesConfigurator) CreateHostRulesForHealthChecks(hostSNATIP, host
 	return nil
 }
 
-func (cfg *IptablesConfigurator) DeleteHostRules() {
+func (cfg *IptablesConfigurator) DeleteHostRules(hostSNATIP, hostSNATIPV6 *netip.Addr) {
 	log.Debug("Attempting to delete hostside iptables rules (if they exist)")
-
-	cfg.executeHostDeleteCommands()
-}
-
-func (cfg *IptablesConfigurator) executeHostDeleteCommands() {
-	optionalDeleteCmds := [][]string{
-		// delete our main jump in the host ruleset. If it's not there, NBD.
-		{"-t", iptablesconstants.NAT, "-D", iptablesconstants.POSTROUTING, "-j", ChainHostPostrouting},
-		// flush-then-delete our created chains
-		// these sometimes fail due to "Device or resource busy" - again NBD.
-		{"-t", iptablesconstants.NAT, "-F", ChainHostPostrouting},
-		{"-t", iptablesconstants.NAT, "-X", ChainHostPostrouting},
+	builder := cfg.appendHostRules(hostSNATIP, hostSNATIPV6)
+	runCommands := func(cmds [][]string, version *dep.IptablesVersion) {
+		for _, cmd := range cmds {
+			// Ignore errors, as it is expected to fail in cases where the node is already cleaned up.
+			cfg.ext.RunQuietlyAndIgnore(iptablesconstants.IPTables, version, nil, cmd...)
+		}
 	}
 
-	// iptablei seems like a reasonable pluralization of iptables
-	iptablesVariant := []dep.IptablesVersion{}
-	iptablesVariant = append(iptablesVariant, cfg.iptV)
+	runCommands(builder.BuildCleanupV4(), &cfg.iptV)
 
 	if cfg.cfg.EnableIPv6 {
-		iptablesVariant = append(iptablesVariant, cfg.ipt6V)
-	}
-	for _, iptVer := range iptablesVariant {
-		for _, cmd := range optionalDeleteCmds {
-			// Ignore errors, as it is expected to fail in cases where the node is already cleaned up.
-			cfg.ext.RunQuietlyAndIgnore(iptablesconstants.IPTables, &iptVer, nil, cmd...)
-		}
+		runCommands(builder.BuildCleanupV6(), &cfg.ipt6V)
 	}
 }
 
 func (cfg *IptablesConfigurator) appendHostRules(hostSNATIP, hostSNATIPV6 *netip.Addr) *builder.IptablesRuleBuilder {
-	log.Info("configuring host-level iptables rules (healthchecks, etc)")
-
 	iptablesBuilder := builder.NewIptablesRuleBuilder(ipbuildConfig(cfg.cfg))
 
 	// For easier cleanup, insert a jump into an owned chain
