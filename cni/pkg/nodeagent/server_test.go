@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	netns "github.com/containernetworking/plugins/pkg/ns"
 	"github.com/stretchr/testify/mock"
 	"golang.org/x/sys/unix"
 	corev1 "k8s.io/api/core/v1"
@@ -39,12 +38,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Mock netNSFunc globally for all server tests
-	originalNetNSFunc := netNSFunc
-	defer func() { netNSFunc = originalNetNSFunc }()
-	netNSFunc = func(nsPath string, fn func(netns.NetNS) error) error {
-		return fn(nil) // Always run on current network NS
-	}
+	// Override host NS path globally for all tests
+	originalHostNSPath := hostNSPath
+	defer func() { hostNSPath = originalHostNSPath }()
+	hostNSPath = "/proc/self/ns/net"
 
 	// Run tests
 	os.Exit(m.Run())

@@ -45,11 +45,12 @@ const (
 )
 
 type AmbientArgs struct {
-	SystemNamespace            string
-	Revision                   string
-	KubeConfig                 string
-	ServerSocket               string
-	DNSCapture                 bool
-	EnableIPv6                 bool
-	ReconcilePodRulesOnStartup bool
+	SystemNamespace               string
+	Revision                      string
+	KubeConfig                    string
+	ServerSocket                  string
+	DNSCapture                    bool
+	EnableIPv6                    bool
+	ReconcilePodRulesOnStartup    bool
+	RunningInHostNetworkNamespace bool
 }

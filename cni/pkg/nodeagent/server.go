@@ -42,11 +42,10 @@ import (
 
 const defaultZTunnelKeepAliveCheckInterval = 5 * time.Second
 
-var log = scopes.CNIAgent
-
-// netNSFunc abstracts the network namespace logic, defaulting to netns.WithNetNSPath.
-// It can be replaced during testing for mocking purposes.
-var netNSFunc = netns.WithNetNSPath
+var (
+	log        = scopes.CNIAgent
+	hostNSPath = "/host/proc/1/ns/net"
+)
 
 type MeshDataplane interface {
 	// MUST be called first, (even before Start()).
@@ -71,12 +70,15 @@ type Server struct {
 	cniServerStopFunc func()
 }
 
-// runWithHostNs executes the provided function within the host network namespace
-func runWithHostNs(f func() error) error {
+// runAsNs executes the function in the given network namespace or the current one if netNs is nil.
+func runAsNs(netNs netns.NetNS, f func() error) error {
 	if f == nil {
 		return nil
 	}
-	return netNSFunc("/host/proc/1/ns/net", func(_ netns.NetNS) error {
+	if netNs == nil {
+		return f()
+	}
+	return netNs.Do(func(_ netns.NetNS) error {
 		err := f()
 		return err
 	})
@@ -103,12 +105,27 @@ func NewServer(ctx context.Context, ready *atomic.Value, pluginSocket string, ar
 		Reconcile:              args.ReconcilePodRulesOnStartup,
 	}
 
-	log.Debug("creating ipsets in the node netns")
-	set, err := createHostsideProbeIpset(hostCfg.EnableIPv6)
-	if err != nil {
-		return nil, fmt.Errorf("error initializing hostside probe ipset: %w", err)
+	// Create Fd for host network namespace
+	var hostNetNS netns.NetNS
+	if !args.RunningInHostNetworkNamespace {
+		hostNetworkNS, err := netns.GetNS(hostNSPath)
+		if err != nil {
+			return nil, fmt.Errorf("cannot obtain host network namespace: %w", err)
+		}
+		hostNetNS = hostNetworkNS
 	}
 
+	log.Debug("creating ipsets in the node netns")
+	var set ipset.IPSet
+	if err = runAsNs(hostNetNS, func() error {
+		set, err = createHostsideProbeIpset(hostCfg.EnableIPv6)
+		if err != nil {
+			return fmt.Errorf("error initializing hostside probe ipset: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	podNsMap := newPodNetnsCache(openNetnsInRoot(pconstants.HostMountsPath))
 	ztunnelServer, err := newZtunnelServer(args.ServerSocket, podNsMap, defaultZTunnelKeepAliveCheckInterval)
 	if err != nil {
@@ -127,7 +144,7 @@ func NewServer(ctx context.Context, ready *atomic.Value, pluginSocket string, ar
 	}
 
 	// Create hostprobe rules now, in the host netns
-	if err := runWithHostNs(func() error {
+	if err := runAsNs(hostNetNS, func() error {
 		hostIptables.DeleteHostRules()
 		if err := hostIptables.CreateHostRulesForHealthChecks(); err != nil {
 			return fmt.Errorf("error initializing the host rules for health checks: %w", err)
@@ -150,6 +167,7 @@ func NewServer(ctx context.Context, ready *atomic.Value, pluginSocket string, ar
 			netServer:          netServer,
 			hostIptables:       hostIptables,
 			hostsideProbeIPSet: set,
+			hostNetNS:          hostNetNS,
 		},
 	}
 	s.NotReady()
@@ -217,6 +235,7 @@ type meshDataplane struct {
 	netServer          MeshDataplane
 	hostIptables       *iptables.IptablesConfigurator
 	hostsideProbeIPSet ipset.IPSet
+	hostNetNS          netns.NetNS
 }
 
 // ConstructInitialSnapshot is always called first, before Start.
@@ -246,7 +265,7 @@ func (s *meshDataplane) Stop(skipCleanup bool) {
 	if !skipCleanup {
 		log.Info("CNI ambient server terminating, cleaning up node net rules")
 
-		_ = runWithHostNs(func() error {
+		_ = runAsNs(s.hostNetNS, func() error {
 			log.Debug("removing host iptables rules")
 			s.hostIptables.DeleteHostRules()
 
@@ -260,6 +279,7 @@ func (s *meshDataplane) Stop(skipCleanup bool) {
 	}
 
 	s.netServer.Stop(skipCleanup)
+	s.hostNetNS.Close()
 }
 
 // AddPodToMesh attempts to inject iptables rules into the pod, and sends the pod to ztunnel.
@@ -343,12 +363,17 @@ func (s *meshDataplane) RemovePodFromMesh(ctx context.Context, pod *corev1.Pod, 
 
 	// Remove the hostside ipset entry first, and unconditionally - if later failures happen, we never
 	// want to leave stale entries (and the pod healthchecks will start to fail, which is a good signal)
-	if err := removePodFromHostNSIpset(pod, &s.hostsideProbeIPSet); err != nil {
-		log.Errorf("failed to remove pod %s from host ipset, error was: %v", pod.Name, err)
-		// Removing pod from ipset should never fail, even if the IP is no longer there
-		// (unless we have a kernel incompatibility).
-		// - so while retrying on ipser remove error is safe from an eventing perspective,
-		// it may not be useful
+	if err := runAsNs(s.hostNetNS, func() error {
+		if err := removePodFromHostNSIpset(pod, &s.hostsideProbeIPSet); err != nil {
+			log.Errorf("failed to remove pod %s from host ipset, error was: %v", pod.Name, err)
+			// Removing pod from ipset should never fail, even if the IP is no longer there
+			// (unless we have a kernel incompatibility).
+			// - so while retrying on ipser remove error is safe from an eventing perspective,
+			// it may not be useful
+			return err
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -385,22 +410,23 @@ func (s *meshDataplane) RemovePodFromMesh(ctx context.Context, pod *corev1.Pod, 
 // IPAM or other things, we may see two pods with the same IP on the same node - we will skip the dupes,
 // which is all we can do - these pods will fail healthcheck until the IPAM issue is resolved (which seems reasonable)
 func (s *meshDataplane) syncHostIPSets(ambientPods []*corev1.Pod) error {
-	var addedIPSnapshot []netip.Addr
-
-	for _, pod := range ambientPods {
-		podIPs := util.GetPodIPsIfPresent(pod)
-		if len(podIPs) == 0 {
-			log.Warnf("pod %s does not appear to have any assigned IPs, not syncing with ipset", pod.Name)
-		} else {
-			addedIps, err := s.addPodToHostNSIpset(pod, podIPs)
-			if err != nil {
-				log.Errorf("pod %s has IP collision, pod will be skipped and will fail healthchecks", pod.Name, podIPs)
+	return runAsNs(s.hostNetNS, func() error {
+		var addedIPSnapshot []netip.Addr
+		for _, pod := range ambientPods {
+			podIPs := util.GetPodIPsIfPresent(pod)
+			if len(podIPs) == 0 {
+				log.Warnf("pod %s does not appear to have any assigned IPs, not syncing with ipset", pod.Name)
+			} else {
+				addedIps, err := s.addPodToHostNSIpset(pod, podIPs)
+				if err != nil {
+					log.Errorf("pod %s has IP collision, pod will be skipped and will fail healthchecks", pod.Name, podIPs)
+				}
+				addedIPSnapshot = append(addedIPSnapshot, addedIps...)
 			}
-			addedIPSnapshot = append(addedIPSnapshot, addedIps...)
-		}
 
-	}
-	return pruneHostIPset(sets.New(addedIPSnapshot...), &s.hostsideProbeIPSet)
+		}
+		return pruneHostIPset(sets.New(addedIPSnapshot...), &s.hostsideProbeIPSet)
+	})
 }
 
 // addPodToHostNSIpset:
@@ -436,7 +462,7 @@ func (s *meshDataplane) addPodToHostNSIpset(pod *corev1.Pod, podIPs []netip.Addr
 	var addedIps []netip.Addr
 
 	// For each pod IP
-	_ = runWithHostNs(func() error {
+	_ = runAsNs(s.hostNetNS, func() error {
 		for _, pip := range podIPs {
 			// Add to host ipset
 			log.Debugf("adding probe ip %s to set", pip)
@@ -458,63 +484,55 @@ func (s *meshDataplane) addPodToHostNSIpset(pod *corev1.Pod, podIPs []netip.Addr
 // Note that if the ipset already exist by name, Create will not return an error.
 //
 // We will unconditionally flush our set before use here, so it shouldn't matter.
+// NOTE that this expects to be run from within the host network namespace!
 func createHostsideProbeIpset(isV6 bool) (ipset.IPSet, error) {
-	var probeSet ipset.IPSet
-	runErr := runWithHostNs(func() error {
-		var err error
-		linDeps := ipset.RealNlDeps()
-		probeSet, err = ipset.NewIPSet(iptables.ProbeIPSet, isV6, linDeps)
-		if err != nil {
-			return err
-		}
-		probeSet.Flush()
-		return nil
-	})
-	return probeSet, runErr
+	linDeps := ipset.RealNlDeps()
+	probeSet, err := ipset.NewIPSet(iptables.ProbeIPSet, isV6, linDeps)
+	if err != nil {
+		return probeSet, err
+	}
+	probeSet.Flush()
+	return probeSet, nil
 }
 
 // removePodFromHostNSIpset will remove (v4, v6) pod IPs from the host IP set(s).
 // Note that unlike when we add the IP to the set, on removal we will simply
 // skip removing the IP if the IP matches, but the UID comment does not match our pod.
+// NOTE that this expects to be run from within the host network namespace!
 func removePodFromHostNSIpset(pod *corev1.Pod, hostsideProbeSet *ipset.IPSet) error {
 	podUID := string(pod.ObjectMeta.UID)
 	log := log.WithLabels("ns", pod.Namespace, "name", pod.Name, "podUID", podUID, "ipset", hostsideProbeSet.Prefix)
 
-	runErr := runWithHostNs(func() error {
-		podIPs := util.GetPodIPsIfPresent(pod)
-		for _, pip := range podIPs {
-			if uidMismatch, err := hostsideProbeSet.ClearEntriesWithIPAndComment(pip, podUID); err != nil {
-				return err
-			} else if uidMismatch != "" {
-				log.Warnf("pod ip %s could not be removed from ipset, found entry with pod UID %s instead", pip, uidMismatch)
-			}
-			log.Debugf("removed pod from host ipset by ip %s", pip)
+	podIPs := util.GetPodIPsIfPresent(pod)
+	for _, pip := range podIPs {
+		if uidMismatch, err := hostsideProbeSet.ClearEntriesWithIPAndComment(pip, podUID); err != nil {
+			return err
+		} else if uidMismatch != "" {
+			log.Warnf("pod ip %s could not be removed from ipset, found entry with pod UID %s instead", pip, uidMismatch)
 		}
-		return nil
-	})
+		log.Debugf("removed pod from host ipset by ip %s", pip)
+	}
 
-	return runErr
+	return nil
 }
 
+// NOTE that this expects to be run from within the host network namespace!
 func pruneHostIPset(expected sets.Set[netip.Addr], hostsideProbeSet *ipset.IPSet) error {
-	runErr := runWithHostNs(func() error {
-		actualIPSetContents, err := hostsideProbeSet.ListEntriesByIP()
-		if err != nil {
-			log.Warnf("unable to list IPSet: %v", err)
+	actualIPSetContents, err := hostsideProbeSet.ListEntriesByIP()
+	if err != nil {
+		log.Warnf("unable to list IPSet: %v", err)
+		return err
+	}
+	actual := sets.New(actualIPSetContents...)
+	stales := actual.DifferenceInPlace(expected)
+
+	for staleIP := range stales {
+		if err := hostsideProbeSet.ClearEntriesWithIP(staleIP); err != nil {
 			return err
 		}
-		actual := sets.New(actualIPSetContents...)
-		stales := actual.DifferenceInPlace(expected)
-
-		for staleIP := range stales {
-			if err := hostsideProbeSet.ClearEntriesWithIP(staleIP); err != nil {
-				return err
-			}
-			log.Debugf("removed stale ip %s from host ipset %s", staleIP, hostsideProbeSet.Prefix)
-		}
-		return nil
-	})
-	return runErr
+		log.Debugf("removed stale ip %s from host ipset %s", staleIP, hostsideProbeSet.Prefix)
+	}
+	return nil
 }
 
 // buildKubeClient creates the kube client
