@@ -21,7 +21,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -73,45 +72,15 @@ func runWithHostNs(f func() error) error {
 	if f == nil {
 		return nil
 	}
-
-	if _, err := os.Stat("/host/proc/1/ns/net"); os.IsNotExist(err) {
-		log.Warnf("Path %s does not exist, running function with switching to host network namespace\n", "/host/proc/1/ns/net")
+	hostNs := "/host/proc/1/ns/net"
+	if _, err := os.Stat(hostNs); os.IsNotExist(err) {
+		log.Warnf("Path %s does not exist, running function without switching to host network namespace\n", hostNs)
 		return f()
 	}
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	currentNS, err := netns.GetCurrentNS()
-	if err != nil {
-		log.Errorf("failed to get current namespace: %v", err)
+	return netns.WithNetNSPath(hostNs, func(_ netns.NetNS) error {
+		err := f()
 		return err
-	}
-	log.Infof("Current NS: %+v", currentNS)
-	defer currentNS.Close()
-
-	hostNS, err := netns.GetNS("/host/proc/1/ns/net")
-	if err != nil {
-		log.Errorf("failed to get host namespace: %v", err)
-		return err
-	}
-	log.Infof("Host NS: %+v", hostNS)
-	defer hostNS.Close()
-
-	if err := unix.Setns(int(hostNS.Fd()), unix.CLONE_NEWNET); err != nil {
-		return fmt.Errorf("Error switching to ns fd %v: %v", hostNS, err)
-	}
-
-	defer func() {
-		// Restore the original namespace
-		if err := unix.Setns(int(currentNS.Fd()), unix.CLONE_NEWNET); err != nil {
-			log.Warnf("Error switching back to original ns %v: %v", currentNS, err)
-		}
-
-		log.Info("Switched NS back")
-	}()
-
-	return f()
+	})
 }
 
 func NewServer(ctx context.Context, ready *atomic.Value, pluginSocket string, args AmbientArgs) (*Server, error) {
