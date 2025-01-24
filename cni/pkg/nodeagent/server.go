@@ -283,7 +283,9 @@ func (s *meshDataplane) Stop(skipCleanup bool) {
 	}
 
 	s.netServer.Stop(skipCleanup)
-	s.hostNetNS.Close()
+	if s.hostNetNS != nil {
+		s.hostNetNS.Close()
+	}
 }
 
 // AddPodToMesh attempts to inject iptables rules into the pod, and sends the pod to ztunnel.
