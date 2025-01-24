@@ -55,7 +55,7 @@ spec:
 {{ toYaml .Values.podAnnotations | indent 8 }}
         {{- end }}
     spec:
-{{- if and .Values.ambient.enabled .Values.ambient.shareHostNetwork }}
+{{- if and .Values.ambient.enabled .Values.ambient.shareHostNetworkNamespace }}
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
 {{- end }}

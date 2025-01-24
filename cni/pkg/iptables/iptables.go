@@ -586,6 +586,7 @@ func (cfg *IptablesConfigurator) delInpodMarkIPRule() error {
 // - kubelet (node-local healthchecks, which we do not capture)
 // - kube-proxy (fowarded/proxied traffic from LoadBalancer-backed services, potentially with public IPs, which we must capture)
 func (cfg *IptablesConfigurator) CreateHostRulesForHealthChecks() error {
+	log.Info("configuring host-level iptables rules (healthchecks, etc)")
 	// Append our rules here
 	builder := cfg.AppendHostRules()
 
@@ -616,7 +617,6 @@ func (cfg *IptablesConfigurator) DeleteHostRules() {
 }
 
 func (cfg *IptablesConfigurator) AppendHostRules() *builder.IptablesRuleBuilder {
-	log.Info("configuring host-level iptables rules (healthchecks, etc)")
 
 	iptablesBuilder := builder.NewIptablesRuleBuilder(ipbuildConfig(cfg.cfg))
 

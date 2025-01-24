@@ -38,10 +38,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Override host NS path globally for all tests
-	originalHostNSPath := hostNSPath
-	defer func() { hostNSPath = originalHostNSPath }()
-	hostNSPath = "/proc/self/ns/net"
+	// Override host network namespace path globally for all tests
+	originalHostNetNSPath := hostNetNSPath
+	defer func() { hostNetNSPath = originalHostNetNSPath }()
+	hostNetNSPath = "/proc/self/ns/net"
 
 	// Run tests
 	os.Exit(m.Run())

@@ -134,7 +134,7 @@ func NewServer(ctx context.Context, ready *atomic.Value, pluginSocket string, ar
 	} else if isHost {
 		log.Infof("CNI Agent is running in the host network namespace")
 		hostNetNS = nil
-
+	}
 	log.Debug("creating ipsets in the node netns")
 	var set ipset.IPSet
 	if err = runAsNs(hostNetNS, func() error {
@@ -541,6 +541,7 @@ func removePodFromHostNSIpset(pod *corev1.Pod, hostsideProbeSet *ipset.IPSet) er
 	return nil
 }
 
+// pruneHostIPset removes stale IPs from the specified host-side IP set that are not part of the expected set of IPs.
 // NOTE that this expects to be run from within the host network namespace!
 func pruneHostIPset(expected sets.Set[netip.Addr], hostsideProbeSet *ipset.IPSet) error {
 	actualIPSetContents, err := hostsideProbeSet.ListEntriesByIP()
