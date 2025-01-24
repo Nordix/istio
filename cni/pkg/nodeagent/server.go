@@ -466,7 +466,7 @@ func (s *meshDataplane) addPodToHostNSIpset(pod *corev1.Pod, podIPs []netip.Addr
 	var addedIps []netip.Addr
 
 	// For each pod IP
-	_ = runAsNs(s.hostNetNS, func() error {
+	err := runAsNs(s.hostNetNS, func() error {
 		for _, pip := range podIPs {
 			// Add to host ipset
 			log.Debugf("adding probe ip %s to set", pip)
@@ -480,6 +480,9 @@ func (s *meshDataplane) addPodToHostNSIpset(pod *corev1.Pod, podIPs []netip.Addr
 		}
 		return nil
 	})
+	if err != nil {
+		ipsetAddrErrs = append(ipsetAddrErrs, err)
+	}
 
 	return addedIps, errors.Join(ipsetAddrErrs...)
 }
