@@ -73,6 +73,12 @@ func runWithHostNs(f func() error) error {
 	if f == nil {
 		return nil
 	}
+
+	if _, err := os.Stat("/host/proc/1/ns/net"); os.IsNotExist(err) {
+		log.Warnf("Path %s does not exist, running function with switching to host network namespace\n", "/host/proc/1/ns/net")
+		return f()
+	}
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
