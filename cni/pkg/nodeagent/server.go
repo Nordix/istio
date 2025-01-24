@@ -106,13 +106,17 @@ func NewServer(ctx context.Context, ready *atomic.Value, pluginSocket string, ar
 	}
 
 	// Create Fd for host network namespace
-	var hostNetNS netns.NetNS
-	if !args.RunningInHostNetworkNamespace {
-		hostNetworkNS, err := netns.GetNS(hostNSPath)
-		if err != nil {
-			return nil, fmt.Errorf("cannot obtain host network namespace: %w", err)
-		}
-		hostNetNS = hostNetworkNS
+	hostNetNS, err := netns.GetNS(hostNSPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot obtain host network namespace: %w", err)
+	}
+	currentNS, err := netns.GetNS("/proc/self/ns/net")
+	if err != nil {
+		return nil, fmt.Errorf("cannot obtain current network namespace: %w", err)
+	}
+	if int(currentNS.Fd()) == int(hostNetNS.Fd()) {
+		log.Infof("CNI Agent is running in the host network namespace")
+		hostNetNS = nil
 	}
 
 	log.Debug("creating ipsets in the node netns")

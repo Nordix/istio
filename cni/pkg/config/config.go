@@ -85,9 +85,6 @@ type InstallConfig struct {
 
 	// Whether reconciliation of iptables at post startup is enabled for Ambient workloads
 	AmbientReconcilePodRulesOnStartup bool
-
-	// Whether the ambient cni server is running in the host namespace or not
-	AmbientRunningInHostNetworkNamespace bool
 }
 
 // RepairConfig struct defines the Istio CNI race repair configuration
@@ -152,7 +149,6 @@ func (c InstallConfig) String() string {
 	b.WriteString("AmbientIPv6: " + fmt.Sprint(c.AmbientIPv6) + "\n")
 	b.WriteString("AmbientDisableSafeUpgrade: " + fmt.Sprint(c.AmbientDisableSafeUpgrade) + "\n")
 	b.WriteString("AmbientReconcilePodRulesOnStartup: " + fmt.Sprint(c.AmbientReconcilePodRulesOnStartup) + "\n")
-	b.WriteString("AmbientRunningInHostNetworkNamespace: " + fmt.Sprint(c.AmbientRunningInHostNetworkNamespace) + "\n")
 	return b.String()
 }
 
