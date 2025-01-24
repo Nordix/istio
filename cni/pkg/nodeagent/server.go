@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	netns "github.com/containernetworking/plugins/pkg/ns"
@@ -43,8 +44,8 @@ import (
 const defaultZTunnelKeepAliveCheckInterval = 5 * time.Second
 
 var (
-	log        = scopes.CNIAgent
-	hostNSPath = "/host/proc/1/ns/net"
+	log           = scopes.CNIAgent
+	hostNetNSPath = "/host/proc/1/ns/net"
 )
 
 type MeshDataplane interface {
@@ -75,6 +76,7 @@ func runAsNs(netNs netns.NetNS, f func() error) error {
 	if f == nil {
 		return nil
 	}
+	// If handle is nil then no namespace switch is required since we are already in the host namespace
 	if netNs == nil {
 		return f()
 	}
@@ -82,6 +84,22 @@ func runAsNs(netNs netns.NetNS, f func() error) error {
 		err := f()
 		return err
 	})
+}
+
+// isHostNetworkNamespace checks if the current process is in the same network namespace as the host
+func isHostNetworkNamespace() (bool, error) {
+	currentNetNS := "/proc/self/ns/net"
+	currentStat, err := os.Stat(currentNetNS)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat current network namespace: %w", err)
+	}
+	hostStat, err := os.Stat(hostNetNSPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat host network namespace: %w", err)
+	}
+
+	// Compare the inode numbers
+	return currentStat.Sys().(*syscall.Stat_t).Ino == hostStat.Sys().(*syscall.Stat_t).Ino, nil
 }
 
 func NewServer(ctx context.Context, ready *atomic.Value, pluginSocket string, args AmbientArgs) (*Server, error) {
@@ -106,18 +124,16 @@ func NewServer(ctx context.Context, ready *atomic.Value, pluginSocket string, ar
 	}
 
 	// Create Fd for host network namespace
-	hostNetNS, err := netns.GetNS(hostNSPath)
+	hostNetNS, err := netns.GetNS(hostNetNSPath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot obtain host network namespace: %w", err)
 	}
-	currentNS, err := netns.GetNS("/proc/self/ns/net")
-	if err != nil {
-		return nil, fmt.Errorf("cannot obtain current network namespace: %w", err)
-	}
-	if int(currentNS.Fd()) == int(hostNetNS.Fd()) {
+
+	if isHost, err := isHostNetworkNamespace(); err != nil {
+		log.Warnf("Network namespace check failed. Assuming the agent is not in the host network namespace. Error: %v", err)
+	} else if isHost {
 		log.Infof("CNI Agent is running in the host network namespace")
 		hostNetNS = nil
-	}
 
 	log.Debug("creating ipsets in the node netns")
 	var set ipset.IPSet
