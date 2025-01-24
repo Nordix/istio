@@ -18,10 +18,12 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	netns "github.com/containernetworking/plugins/pkg/ns"
 	"github.com/stretchr/testify/mock"
 	"golang.org/x/sys/unix"
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +37,18 @@ import (
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/test/util/assert"
 )
+
+func TestMain(m *testing.M) {
+	// Mock netNSFunc globally for all server tests
+	originalNetNSFunc := netNSFunc
+	defer func() { netNSFunc = originalNetNSFunc }()
+	netNSFunc = func(nsPath string, fn func(netns.NetNS) error) error {
+		return fn(nil) // Always run on current network NS
+	}
+
+	// Run tests
+	os.Exit(m.Run())
+}
 
 func TestMeshDataplaneAddsAnnotationOnAdd(t *testing.T) {
 	pod := &corev1.Pod{

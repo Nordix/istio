@@ -44,6 +44,10 @@ const defaultZTunnelKeepAliveCheckInterval = 5 * time.Second
 
 var log = scopes.CNIAgent
 
+// netNSFunc abstracts the network namespace logic, defaulting to netns.WithNetNSPath.
+// It can be replaced during testing for mocking purposes.
+var netNSFunc = netns.WithNetNSPath
+
 type MeshDataplane interface {
 	// MUST be called first, (even before Start()).
 	ConstructInitialSnapshot(existingAmbientPods []*corev1.Pod) error
@@ -72,12 +76,7 @@ func runWithHostNs(f func() error) error {
 	if f == nil {
 		return nil
 	}
-	hostNs := "/host/proc/1/ns/net"
-	if _, err := os.Stat(hostNs); os.IsNotExist(err) {
-		log.Warnf("Path %s does not exist, running function without switching to host network namespace\n", hostNs)
-		return f()
-	}
-	return netns.WithNetNSPath(hostNs, func(_ netns.NetNS) error {
+	return netNSFunc("/host/proc/1/ns/net", func(_ netns.NetNS) error {
 		err := f()
 		return err
 	})
