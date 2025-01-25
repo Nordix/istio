@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"net/netip"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,16 +35,6 @@ import (
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/test/util/assert"
 )
-
-func TestMain(m *testing.M) {
-	// Override host network namespace path globally for all tests
-	originalHostNetNSPath := hostNetNSPath
-	defer func() { hostNetNSPath = originalHostNetNSPath }()
-	hostNetNSPath = "/proc/self/ns/net"
-
-	// Run tests
-	os.Exit(m.Run())
-}
 
 func TestMeshDataplaneAddsAnnotationOnAdd(t *testing.T) {
 	pod := &corev1.Pod{
@@ -321,7 +310,7 @@ func TestMeshDataplaneAddPodToHostNSIPSets(t *testing.T) {
 	).Return(nil)
 
 	podIPs := []netip.Addr{netip.MustParseAddr("99.9.9.9"), netip.MustParseAddr("2.2.2.2")}
-	_, err := m.addPodToHostNSIpset(pod, podIPs)
+	_, err := m.addPodToHostNSIpset(pod, podIPs, false)
 	assert.NoError(t, err)
 
 	fakeIPSetDeps.AssertExpectations(t)
@@ -359,7 +348,7 @@ func TestMeshDataplaneAddPodToHostNSIPSetsV6(t *testing.T) {
 	).Return(nil)
 
 	podIPs := []netip.Addr{netip.MustParseAddr(pod.Status.PodIPs[0].IP), netip.MustParseAddr(pod.Status.PodIPs[1].IP)}
-	_, err := m.addPodToHostNSIpset(pod, podIPs)
+	_, err := m.addPodToHostNSIpset(pod, podIPs, false)
 	assert.NoError(t, err)
 
 	fakeIPSetDeps.AssertExpectations(t)
@@ -397,7 +386,7 @@ func TestMeshDataplaneAddPodToHostNSIPSetsDualstack(t *testing.T) {
 	).Return(nil)
 
 	podIPs := []netip.Addr{netip.MustParseAddr("e9ac:1e77:90ca:399f:4d6d:ece3:2f9b:3162"), netip.MustParseAddr("99.9.9.9")}
-	_, err := m.addPodToHostNSIpset(pod, podIPs)
+	_, err := m.addPodToHostNSIpset(pod, podIPs, false)
 	assert.NoError(t, err)
 
 	fakeIPSetDeps.AssertExpectations(t)
@@ -435,7 +424,7 @@ func TestMeshDataplaneAddPodIPToHostNSIPSetsReturnsErrorIfOneFails(t *testing.T)
 	).Return(errors.New("bwoah"))
 
 	podIPs := []netip.Addr{netip.MustParseAddr("99.9.9.9"), netip.MustParseAddr("2.2.2.2")}
-	addedPIPs, err := m.addPodToHostNSIpset(pod, podIPs)
+	addedPIPs, err := m.addPodToHostNSIpset(pod, podIPs, false)
 	assert.Error(t, err)
 	assert.Equal(t, 1, len(addedPIPs), "only expected one IP to be added")
 
@@ -460,7 +449,7 @@ func TestMeshDataplaneRemovePodIPFromHostNSIPSets(t *testing.T) {
 		string(pod.ObjectMeta.UID),
 	).Return("", nil)
 
-	err := removePodFromHostNSIpset(pod, &set)
+	err := removePodFromHostNSIpset(nil, pod, &set)
 	assert.NoError(t, err)
 	fakeIPSetDeps.AssertExpectations(t)
 }
@@ -483,7 +472,7 @@ func TestMeshDataplaneRemovePodIPFromHostNSIPSetsIgnoresEntriesWithMismatchedUID
 		string(pod.ObjectMeta.UID),
 	).Return("mismatched-uid", nil)
 
-	err := removePodFromHostNSIpset(pod, &set)
+	err := removePodFromHostNSIpset(nil, pod, &set)
 	assert.NoError(t, err)
 	fakeIPSetDeps.AssertExpectations(t)
 }
