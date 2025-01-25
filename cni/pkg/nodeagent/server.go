@@ -503,7 +503,7 @@ func (s *meshDataplane) addPodToHostNSIpset(pod *corev1.Pod, podIPs []netip.Addr
 // Note that if the ipset already exist by name, Create will not return an error.
 //
 // We will unconditionally flush our set before use here, so it shouldn't matter.
-// NOTE that this expects to be run from within the host network namespace!
+// NOTE: If hostNetNS is nil, this function must be executed from within the host network namespace!
 func createHostsideProbeIpset(hostNetNS netns.NetNS, isV6 bool) (ipset.IPSet, error) {
 	var probeSet ipset.IPSet
 	runErr := runAsNs(hostNetNS, func() error {
@@ -522,7 +522,7 @@ func createHostsideProbeIpset(hostNetNS netns.NetNS, isV6 bool) (ipset.IPSet, er
 // removePodFromHostNSIpset will remove (v4, v6) pod IPs from the host IP set(s).
 // Note that unlike when we add the IP to the set, on removal we will simply
 // skip removing the IP if the IP matches, but the UID comment does not match our pod.
-// NOTE that this expects to be run from within the host network namespace!
+// NOTE: If hostNetNS is nil, this function must be executed from within the host network namespace!
 func removePodFromHostNSIpset(hostNetNS netns.NetNS, pod *corev1.Pod, hostsideProbeSet *ipset.IPSet) error {
 	podUID := string(pod.ObjectMeta.UID)
 	log := log.WithLabels("ns", pod.Namespace, "name", pod.Name, "podUID", podUID, "ipset", hostsideProbeSet.Prefix)
@@ -542,7 +542,7 @@ func removePodFromHostNSIpset(hostNetNS netns.NetNS, pod *corev1.Pod, hostsidePr
 }
 
 // pruneHostIPset removes stale IPs from the specified host-side IP set that are not part of the expected set of IPs.
-// NOTE that this expects to be run from within the host network namespace!
+// NOTE: If hostNetNS is nil, this function must be executed from within the host network namespace!
 func pruneHostIPset(hostNetNS netns.NetNS, expected sets.Set[netip.Addr], hostsideProbeSet *ipset.IPSet) error {
 	actualIPSetContents, err := hostsideProbeSet.ListEntriesByIP()
 	if err != nil {
