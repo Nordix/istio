@@ -544,15 +544,15 @@ func removePodFromHostNSIpset(hostNetNS netns.NetNS, pod *corev1.Pod, hostsidePr
 // pruneHostIPset removes stale IPs from the specified host-side IP set that are not part of the expected set of IPs.
 // NOTE: If hostNetNS is nil, this function must be executed from within the host network namespace!
 func pruneHostIPset(hostNetNS netns.NetNS, expected sets.Set[netip.Addr], hostsideProbeSet *ipset.IPSet) error {
-	actualIPSetContents, err := hostsideProbeSet.ListEntriesByIP()
-	if err != nil {
-		log.Warnf("unable to list IPSet: %v", err)
-		return err
-	}
-	actual := sets.New(actualIPSetContents...)
-	stales := actual.DifferenceInPlace(expected)
-
 	return runAsNs(hostNetNS, func() error {
+		actualIPSetContents, err := hostsideProbeSet.ListEntriesByIP()
+		if err != nil {
+			log.Warnf("unable to list IPSet: %v", err)
+			return err
+		}
+		actual := sets.New(actualIPSetContents...)
+		stales := actual.DifferenceInPlace(expected)
+
 		for staleIP := range stales {
 			if err := hostsideProbeSet.ClearEntriesWithIP(staleIP); err != nil {
 				return err
