@@ -428,7 +428,7 @@ func (s *meshDataplane) syncHostIPSets(ambientPods []*corev1.Pod) error {
 			if len(podIPs) == 0 {
 				log.Warnf("pod %s does not appear to have any assigned IPs, not syncing with ipset", pod.Name)
 			} else {
-				addedIps, err := s.addPodToHostNSIpset(pod, podIPs, false) // Disable network switch since we already did it above
+				addedIps, err := s.addPodToHostNSIpset(pod, podIPs, false) // Disable netNS switch since we already did it above
 				if err != nil {
 					log.Errorf("pod %s has IP collision, pod will be skipped and will fail healthchecks", pod.Name, podIPs)
 				}
