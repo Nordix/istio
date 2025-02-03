@@ -620,7 +620,9 @@ func (cfg *IptablesConfigurator) DeleteHostRules() {
 		}
 		return nil
 	})
-	log.Errorf("Can't switch to host namespace: %v", err)
+	if err != nil {
+		log.Errorf("Can't switch to host namespace: %v", err)
+	}
 }
 
 func (cfg *IptablesConfigurator) AppendHostRules() *builder.IptablesRuleBuilder {
