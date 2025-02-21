@@ -53,6 +53,7 @@ var (
 const (
 	ISTIOINIT  = "istio-init"
 	ISTIOPROXY = "istio-proxy"
+	INSTALLCNI = "install-cni"
 )
 
 // Config is whatever you expect your configuration json to be. This is whatever
@@ -261,6 +262,11 @@ func doAddRun(args *skel.CmdArgs, conf *Config, kClient kubernetes.Interface, ru
 
 	if !pi.Containers.Contains(ISTIOPROXY) {
 		log.Infof("excluded because it does not have istio-proxy container (have %v)", sets.SortedList(pi.Containers))
+		return nil
+	}
+
+	if pi.Containers.Contains(INSTALLCNI) {
+		log.Infof("excluded because it contains install-cni container")
 		return nil
 	}
 
